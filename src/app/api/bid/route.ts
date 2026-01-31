@@ -92,19 +92,27 @@ export async function POST(req: Request) {
     // 5) Apply bid timer rule:
     // ends_at becomes max(current ends_at, now + bid_hours)
     const settingsRes = await supabaseAdmin
-      .from('draft_settings')
-      .select('bid_hours')
-      .eq('draft_id', draftId)
-      .maybeSingle()
+  .from('draft_settings')
+  .select('bid_seconds, bid_hours')
+  .eq('draft_id', draftId)
+  .maybeSingle()
 
-    if (settingsRes.error) return NextResponse.json({ error: settingsRes.error.message }, { status: 500 })
-    const bidHours = Number(settingsRes.data?.bid_hours ?? 12)
+if (settingsRes.error) return NextResponse.json({ error: settingsRes.error.message }, { status: 500 })
 
-    const now = Date.now()
-    const currentEndsMs = new Date(auction.ends_at).getTime()
-    const minEndsMs = now + bidHours * 60 * 60 * 1000
-    const newEndsMs = Math.max(currentEndsMs, minEndsMs)
-    const newEnds = new Date(newEndsMs).toISOString()
+const bidSeconds =
+  settingsRes.data?.bid_seconds != null
+    ? Number(settingsRes.data.bid_seconds)
+    : Number(settingsRes.data?.bid_hours ?? 12) * 3600
+
+if (!Number.isFinite(bidSeconds) || bidSeconds < 0) {
+  return NextResponse.json({ error: 'Invalid bid timer setting.' }, { status: 400 })
+}
+
+const now = Date.now()
+const currentEndsMs = new Date(auction.ends_at).getTime()
+const minEndsMs = now + bidSeconds * 1000
+const newEndsMs = Math.max(currentEndsMs, minEndsMs)
+const newEnds = new Date(newEndsMs).toISOString()
 
     // 6) Update auction
     const upRes = await supabaseAdmin

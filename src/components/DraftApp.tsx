@@ -43,14 +43,24 @@ type Auction = {
 
 type DraftSettings = {
   draft_id: string
-  nomination_hours: number
-  bid_hours: number
+  nomination_hours: number | null
+  bid_hours: number | null
+  nomination_seconds: number | null
+  bid_seconds: number | null
 }
 
 const DRAFT_ID = process.env.NEXT_PUBLIC_DRAFT_ID ?? ''
 
-const PRIMARY_POSITIONS = new Set(['C','1B','2B','SS','3B','RF','CF','LF'])
-const SECONDARY_POSITIONS = new Set(['C','1B','2B','SS','3B','RF','CF','LF','IF','OF','IF/OF','1B/OF'])
+const PRIMARY_POSITIONS = new Set([
+  'C','1B','2B','SS','3B','RF','CF','LF',
+  'SP','SP/RP','RP','CP',
+])
+
+const SECONDARY_POSITIONS = new Set([
+  'C','1B','2B','SS','3B','RF','CF','LF',
+  'IF','OF','IF/OF','1B/OF',
+  // If you ever want pitchers to have secondary roles too, add them here later.
+])
 
 function normPos(s: unknown) {
   return String(s ?? '').trim().toUpperCase()
@@ -80,8 +90,8 @@ export default function DraftApp({ showAdmin }: { showAdmin: boolean }) {
 const [lockedTeamId, setLockedTeamId] = useState<string>('')
 
   const [settings, setSettings] = useState<DraftSettings | null>(null)
-  const [adminNominationHours, setAdminNominationHours] = useState<number>(12)
-const [adminBidHours, setAdminBidHours] = useState<number>(12)
+  const [adminNominationSeconds, setAdminNominationSeconds] = useState<number>(12 * 3600)
+const [adminBidSeconds, setAdminBidSeconds] = useState<number>(12 * 3600)
 
   useEffect(() => {
   const t = setInterval(() => setNowTick(Date.now()), 1000)
@@ -99,13 +109,20 @@ useEffect(() => {
 
 useEffect(() => {
   if (!settings) return
-  setAdminNominationHours(settings.nomination_hours ?? 12)
-  setAdminBidHours(settings.bid_hours ?? 12)
+  setAdminNominationSeconds(
+    settings.nomination_seconds ?? (settings.nomination_hours ?? 12) * 3600
+  )
+  setAdminBidSeconds(
+    settings.bid_seconds ?? (settings.bid_hours ?? 12) * 3600
+  )
 }, [settings])
 
-  const [teamsCsv, setTeamsCsv] = useState('name,budget,spots\nTeam A,200,23\nTeam B,200,23')
-  const [playersCsv, setPlayersCsv] = useState('name,rating,position\nPlayer One,78,F\nPlayer Two,82,G')
-
+  const [teamsCsv, setTeamsCsv] = useState(
+  'name,budget,spots,code\nTeam A,200,23,ABC123\nTeam B,200,23,DEF456'
+)
+const [playersCsv, setPlayersCsv] = useState(
+  'name,primary,secondary\nJohn Doe,SS,2B\nJane Doe,1B,\nJoe Smith,RF,OF\nJim Jones,C,1B/OF'
+)
   function playerCanPlayPosition(p: Player, targetPos: string) {
   const t = (targetPos ?? '').toUpperCase()
   if (t === 'ALL') return true
@@ -168,7 +185,7 @@ const selectedAuctionHighTeamName = selectedAuction?.high_team_id
 const [teamsRes, playersRes, auctionsRes, stateRes, settingsRes] = await Promise.all([
   supabase
     .from('teams')
-    .select('id,name,join_code,budget_remaining,roster_spots_total,roster_spots_remaining')
+    .select('id,name,budget_remaining,roster_spots_total,roster_spots_remaining')
     .eq('draft_id', DRAFT_ID)
     .order('name'),
 
@@ -192,10 +209,10 @@ const [teamsRes, playersRes, auctionsRes, stateRes, settingsRes] = await Promise
     .single(),
 
   supabase
-    .from('draft_settings')
-    .select('draft_id,nomination_hours,bid_hours')
-    .eq('draft_id', DRAFT_ID)
-    .single(),
+  .from('draft_settings')
+  .select('draft_id,nomination_hours,bid_hours,nomination_seconds,bid_seconds')
+  .eq('draft_id', DRAFT_ID)
+  .single(),
 ])
 
     if (teamsRes.error) return setError(teamsRes.error.message)
@@ -212,75 +229,67 @@ const [teamsRes, playersRes, auctionsRes, stateRes, settingsRes] = await Promise
     
   }
 
-  async function importTeamsFromCsv() {
+async function importTeamsFromCsv() {
   setError('')
   if (!DRAFT_ID) return setError('Missing DRAFT_ID.')
 
-  const parsed = Papa.parse(teamsCsv.trim(), { header: true, skipEmptyLines: true })
-  if (parsed.errors.length) return setError(parsed.errors[0].message)
+  // Admin-only: require admin code (same pattern as players import)
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) return setError('Missing admin code. Refresh /admin and enter the code again.')
 
-  const rows = (parsed.data as any[])
-  .map((r) => {
-    const code = String(r.code ?? r.join_code ?? '').trim()
-    const name = String(r.name ?? '').trim()
-    const budget = parseInt(String(r.budget ?? ''), 10)
-    const spots = parseInt(String(r.spots ?? r.roster_spots ?? r.roster_spots_total ?? ''), 10)
-
-    return {
+  const res = await fetch('/api/import-teams', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
       draft_id: DRAFT_ID,
-      name,
-      join_code: code,
-      budget_total: Number.isFinite(budget) ? budget : 200,
-      budget_remaining: Number.isFinite(budget) ? budget : 200,
-      roster_spots_total: Number.isFinite(spots) ? spots : 0,
-      roster_spots_remaining: Number.isFinite(spots) ? spots : 0,
-    }
-  })
-  .filter((r) => r.name)
-
-  const firstErr = (rows as any[]).find((x) => x?.error)?.error
-if (firstErr) return setError(firstErr)
-
-  if (!rows.length) return setError('No valid team rows found.')
-    if (rows.some(r => !Number.isFinite(r.roster_spots_total) || r.roster_spots_total <= 0)) {
-  return setError('Each team must have a valid spots value (> 0). CSV headers must include: name,budget,spots')
-}
-if (rows.some(r => !r.join_code)) {
-  return setError('Each team must have a non-empty code. CSV headers must include: name,budget,spots,code')
-}
-
-  const res = await supabase
-  .from('teams')
-  .upsert(rows, { onConflict: 'draft_id,name' })
-  if (res.error) return setError(res.error.message)
-
-  await supabase.from('draft_events').insert({
-    draft_id: DRAFT_ID,
-    event_type: 'IMPORT_TEAMS',
-    payload: { count: rows.length },
+      csv: teamsCsv,
+    }),
   })
 
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) return setError(data?.error ?? 'Import teams failed.')
+
+  setError(`Imported ${data?.count ?? 0} teams.`)
   await loadAll()
 }
 
-function joinTeamByCode() {
+async function joinTeamByCode() {
   setError('')
   const code = teamCode.trim()
   if (!code) {
     setError('Enter your team code.')
     return
   }
-
-  const match = teams.find(t => String(t.join_code ?? '').trim() === code)
-  if (!match) {
-    setError('Invalid team code.')
+  if (!DRAFT_ID) {
+    setError('Missing DRAFT_ID.')
     return
   }
 
-  setLockedTeamId(match.id)
-  setSelectedTeamId(match.id)
-  localStorage.setItem('locked_team_id', match.id)
-  localStorage.setItem('locked_team_code', code)
+  const res = await fetch('/api/join-team', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ draft_id: DRAFT_ID, code }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    setError(data?.error ?? 'Invalid team code.')
+    return
+  }
+
+  const teamId = String(data?.team_id ?? '')
+  if (!teamId) {
+    setError('Join failed (missing team id).')
+    return
+  }
+
+  setLockedTeamId(teamId)
+  setSelectedTeamId(teamId)
+  localStorage.setItem('locked_team_id', teamId)
+  localStorage.setItem('locked_team_code', code) // keep this; /api/bid uses it
   setTeamCode('')
 }
 
@@ -295,16 +304,26 @@ async function saveDraftSettings() {
   setError('')
   if (!DRAFT_ID) return setError('Missing DRAFT_ID.')
 
-  const res = await supabase
-    .from('draft_settings')
-    .upsert({
-      draft_id: DRAFT_ID,
-      nomination_hours: adminNominationHours,
-      bid_hours: adminBidHours,
-    })
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) return setError('Missing admin code. Refresh /admin and enter the code again.')
 
-  if (res.error) return setError(res.error.message)
+  const res = await fetch('/api/save-draft-settings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+  draft_id: DRAFT_ID,
+  nomination_seconds: adminNominationSeconds,
+  bid_seconds: adminBidSeconds,
+}),
+  })
 
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) return setError(data?.error ?? 'Save settings failed.')
+
+  setError('Saved timer settings.')
   await loadAll()
 }
 
@@ -342,87 +361,30 @@ async function replaceTeamsFromCsv() {
   setError('')
   if (!DRAFT_ID) return setError('Missing DRAFT_ID.')
 
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) return setError('Missing admin code. Refresh /admin and enter the code again.')
+
   const ok = window.confirm(
     'Replace Teams will remove ALL current teams for this draft and load the teams from the CSV.\n\nRecommended: Run Reset Draft first.\n\nContinue?'
   )
   if (!ok) return
 
-  // 0) Safety check: draft should be "empty" (no auctions, no drafted players)
-  const [openAuctionsRes, draftedPlayersRes] = await Promise.all([
-    supabase
-      .from('auctions')
-      .select('id', { count: 'exact', head: true })
-      .eq('draft_id', DRAFT_ID),
-    supabase
-      .from('players')
-      .select('id', { count: 'exact', head: true })
-      .eq('draft_id', DRAFT_ID)
-      .not('drafted_by_team_id', 'is', null),
-  ])
-
-  if (openAuctionsRes.error) return setError(openAuctionsRes.error.message)
-  if (draftedPlayersRes.error) return setError(draftedPlayersRes.error.message)
-
-  const auctionsCount = openAuctionsRes.count ?? 0
-  const draftedCount = draftedPlayersRes.count ?? 0
-
-  if (auctionsCount > 0 || draftedCount > 0) {
-    return setError(
-      `Cannot replace teams while draft has data.\nAuctions: ${auctionsCount}, Drafted players: ${draftedCount}.\n\nRun Reset Draft first, then replace teams.`
-    )
-  }
-
-  // 1) Parse CSV
-  const parsed = Papa.parse(teamsCsv.trim(), { header: true, skipEmptyLines: true })
-  if (parsed.errors.length) return setError(parsed.errors[0].message)
-
-  const rows = (parsed.data as any[])
-    .map((r) => {
-      const name = String(r.name ?? '').trim()
-      const budget = parseInt(String(r.budget ?? '200'), 10)
-      const spots = parseInt(String(r.spots ?? '23'), 10)
-
-      if (!name) return null
-      if (!Number.isFinite(budget) || budget <= 0) return { error: `Invalid budget for "${name}".` }
-      if (!Number.isFinite(spots) || spots < 0) return { error: `Invalid spots for "${name}".` }
-
-      return {
-        draft_id: DRAFT_ID,
-        name,
-        budget_total: budget,
-        budget_remaining: budget,
-        roster_spots_total: spots,
-        roster_spots_remaining: spots,
-      }
-    })
-    .filter(Boolean)
-
-  const firstErr = (rows as any[]).find((x) => x?.error)?.error
-  if (firstErr) return setError(firstErr)
-
-  if (!rows.length) return setError('No valid team rows found.')
-
-  // 2) Delete existing teams for this draft
-  const del = await supabase
-    .from('teams')
-    .delete()
-    .eq('draft_id', DRAFT_ID)
-
-  if (del.error) return setError(del.error.message)
-
-  // 3) Insert/upsert new teams
-  const up = await supabase
-    .from('teams')
-    .upsert(rows, { onConflict: 'draft_id,name' })
-
-  if (up.error) return setError(up.error.message)
-
-  await supabase.from('draft_events').insert({
-    draft_id: DRAFT_ID,
-    event_type: 'REPLACE_TEAMS',
-    payload: { count: rows.length },
+  const res = await fetch('/api/replace-teams', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+      draft_id: DRAFT_ID,
+      csv: teamsCsv,
+    }),
   })
 
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) return setError(data?.error ?? 'Replace teams failed.')
+
+  setError(`Replaced teams: ${data?.count ?? 0}.`)
   await loadAll()
 }
 
@@ -478,80 +440,29 @@ function teamAvailableBudgetForBid(team: Team, auction: Auction) {
 }
 
 async function importPlayersFromCsv() {
+  if (!showAdmin) return setError('Admin only.')
+
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) return setError('Missing admin code. Refresh /admin and enter the code again.')
+
   setError('')
-  if (!DRAFT_ID) return setError('Missing DRAFT_ID.')
 
-  const raw = playersCsv.trim()
-  if (!raw) return setError('Players CSV is empty.')
-
-  // Accept either:
-  // 1) no header:  John Doe,SS,2B
-  // 2) header:     name,primary,secondary
-  const firstLine = raw.split(/\r?\n/)[0] ?? ''
-  const hasHeader = firstLine.toLowerCase().includes('name')
-
-  const parsed = Papa.parse(raw, {
-    header: hasHeader,
-    skipEmptyLines: true,
+  const res = await fetch('/api/import-players', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+      draft_id: DRAFT_ID,
+      csv: playersCsv,
+    }),
   })
 
-  if (parsed.errors.length) return setError(parsed.errors[0].message)
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) return setError(data?.error ?? 'Import players failed.')
 
-  const rows = (parsed.data as any[])
-    .map((r) => {
-      let name = ''
-      let primary = ''
-      let secondary = ''
-
-      if (hasHeader) {
-        name = String(r.name ?? '').trim()
-        primary = normPos(r.primary ?? r.pos1 ?? r.position_primary)
-        secondary = normPos(r.secondary ?? r.pos2 ?? r.position_secondary)
-      } else {
-        // headerless: columns 0,1,2
-        const arr = Array.isArray(r) ? r : []
-        name = String(arr[0] ?? '').trim()
-        primary = normPos(arr[1])
-        secondary = normPos(arr[2])
-      }
-
-      if (!name) return null
-
-      // Validate positions (primary required)
-      if (!primary) return { error: `Missing primary position for "${name}".` }
-      if (!PRIMARY_POSITIONS.has(primary)) return { error: `Invalid primary position "${primary}" for "${name}".` }
-
-      if (secondary && !SECONDARY_POSITIONS.has(secondary)) {
-        return { error: `Invalid secondary position "${secondary}" for "${name}".` }
-      }
-
-      const metadata: any = {
-        position_primary: primary,
-      }
-      if (secondary) metadata.position_secondary = secondary
-
-      return { draft_id: DRAFT_ID, name, metadata }
-    })
-    .filter(Boolean)
-
-  // If any row returned an {error: "..."} object, show first error
-  const firstErr = (rows as any[]).find((x) => x?.error)?.error
-  if (firstErr) return setError(firstErr)
-
-  if (!rows.length) return setError('No valid player rows found.')
-
-  const res = await supabase
-    .from('players')
-    .upsert(rows as any[], { onConflict: 'draft_id,name' })
-
-  if (res.error) return setError(res.error.message)
-
-  await supabase.from('draft_events').insert({
-    draft_id: DRAFT_ID,
-    event_type: 'IMPORT_PLAYERS',
-    payload: { count: rows.length },
-  })
-
+  setError(`Imported ${data?.count ?? 0} players.`)
   await loadAll()
 }
 
@@ -569,64 +480,51 @@ function formatRemaining(ms: number) {
   return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`
 }
 
-async function replacePlayersFromCsv() {
-  setError('')
-  if (!DRAFT_ID) return setError('Missing DRAFT_ID.')
+async function autoFinalizeExpiredAuctionsFromServer() {
+  if (!DRAFT_ID) return
 
-  // Clear current nomination BEFORE deleting players (FK safety)
-  const clearNom = await supabase
-    .from('draft_state')
-    .update({
-      nominated_player_id: null,
-      high_bid: 0,
-      high_team_id: null,
-      ends_at: null,
-      last_bid_at: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('draft_id', DRAFT_ID)
-
-  if (clearNom.error) return setError(clearNom.error.message)
-
-  // Delete ONLY undrafted players
-// 1) Get IDs of undrafted players (the ones we plan to remove)
-const undraftedRes = await supabase
-  .from('players')
-  .select('id')
-  .eq('draft_id', DRAFT_ID)
-  .is('drafted_by_team_id', null)
-
-if (undraftedRes.error) return setError(undraftedRes.error.message)
-
-const undraftedIds = (undraftedRes.data ?? []).map((r) => r.id)
-
-if (undraftedIds.length > 0) {
-  // 2) Delete auctions that reference these undrafted players (prevents FK violation)
-  const delAuctions = await supabase
-    .from('auctions')
-    .delete()
-    .eq('draft_id', DRAFT_ID)
-    .in('player_id', undraftedIds)
-
-  if (delAuctions.error) return setError(delAuctions.error.message)
-
-  // 3) Now delete the undrafted players
-  const delPlayers = await supabase
-    .from('players')
-    .delete()
-    .eq('draft_id', DRAFT_ID)
-    .in('id', undraftedIds)
-
-  if (delPlayers.error) return setError(delPlayers.error.message)
-}
-
-  await supabase.from('draft_events').insert({
-    draft_id: DRAFT_ID,
-    event_type: 'REPLACE_UNDRAFTED_PLAYERS_CLEAR',
-    payload: {},
+  const res = await fetch('/api/auto-finalize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ draft_id: DRAFT_ID }),
   })
 
-  // Import the CSV using the same validation + upsert logic
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    // Keep this quiet unless you want to see it
+    // setError(data?.error ?? 'Auto-finalize failed.')
+    return
+  }
+
+  if ((data?.finalized ?? 0) > 0) {
+    await loadAll()
+  }
+}
+
+async function replacePlayersFromCsv() {
+  if (!showAdmin) return setError('Admin only.')
+
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) return setError('Missing admin code. Refresh /admin and enter the code again.')
+
+  const ok = window.confirm('Replace Undrafted Players will remove all UNDRAFTED players and related open auctions, then import the new list. Continue?')
+  if (!ok) return
+
+  setError('Clearing undrafted players...')
+
+  const clearRes = await fetch('/api/replace-undrafted-players', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({ draft_id: DRAFT_ID }),
+  })
+
+  const clearData = await clearRes.json().catch(() => ({}))
+  if (!clearRes.ok) return setError(clearData?.error ?? 'Replace undrafted players failed.')
+
+  setError('Importing players...')
   await importPlayersFromCsv()
 }
 
@@ -645,8 +543,8 @@ if (undraftedIds.length > 0) {
       .subscribe()
       .on('postgres_changes', { event: '*', schema: 'public', table: 'auctions', filter: `draft_id=eq.${DRAFT_ID}` }, () => loadAll())
     const finalizeTimer = setInterval(() => {
-  autoFinalizeExpiredAuctionsFromDb()
-}, 15000)
+  if (showAdmin) autoFinalizeExpiredAuctionsFromServer()
+}, 5000)
 
    return () => {
   clearInterval(finalizeTimer)
@@ -721,14 +619,13 @@ const currentEndsMs = new Date(auction.ends_at).getTime()
 const newEndsMs = Math.max(currentEndsMs, minEndsMs)
 const newEnds = new Date(newEndsMs)
 
-// Users: require team code. Admin: we can use the team’s join_code if present.
+// Users: require team code. Admin: bidding as a team is disabled.
 let code = ''
 if (!showAdmin) {
   code = localStorage.getItem('locked_team_code') ?? ''
   if (!code) return setError('Join your team first.')
 } else {
-  // admin can bid as any selected team (optional)
-  code = String(team.join_code ?? '').trim()
+  return setError('Admin bidding as a team is disabled. Use a team account to bid.')
 }
 
 const res = await fetch('/api/bid', {
@@ -806,6 +703,8 @@ await loadAll()
 
 async function autoFinalizeExpiredAuctionsFromDb() {
   setError('') // optional; remove if you don't want this to clear errors
+
+  console.log('[autoFinalize] tick', new Date().toISOString())
 
   if (!DRAFT_ID) return
 
@@ -1243,30 +1142,78 @@ return (
 
   <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
     <label>
-      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-        Nomination timer (hours)
-      </div>
-      <input
-        type="number"
-        min={1}
-        value={adminNominationHours}
-        onChange={(e) => setAdminNominationHours(parseInt(e.target.value || '12', 10))}
-        style={{ width: '100%' }}
-      />
-    </label>
+  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+    Nomination timer
+  </div>
+
+  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+    <input
+      type="number"
+      min={0}
+      value={Math.floor(adminNominationSeconds / 60)}
+      onChange={(e) => {
+        const minutes = parseInt(e.target.value || '0', 10)
+        setAdminNominationSeconds(
+          minutes * 60 + (adminNominationSeconds % 60)
+        )
+      }}
+      style={{ width: 80 }}
+    />
+    <span>min</span>
+
+    <input
+      type="number"
+      min={0}
+      max={59}
+      value={adminNominationSeconds % 60}
+      onChange={(e) => {
+        const seconds = parseInt(e.target.value || '0', 10)
+        setAdminNominationSeconds(
+          Math.floor(adminNominationSeconds / 60) * 60 + seconds
+        )
+      }}
+      style={{ width: 80 }}
+    />
+    <span>sec</span>
+  </div>
+</label>
 
     <label>
-      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-        Bid timer (hours)
-      </div>
-     <input
-  type="number"
-  min={0}
-  value={adminBidHours}
-  onChange={(e) => setAdminBidHours(parseInt(e.target.value || '12', 10))}
-  style={{ width: '100%' }}
-/>
-    </label>
+  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+    Bid timer extension
+  </div>
+
+  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+    <input
+      type="number"
+      min={0}
+      value={Math.floor(adminBidSeconds / 60)}
+      onChange={(e) => {
+        const minutes = parseInt(e.target.value || '0', 10)
+        setAdminBidSeconds(
+          minutes * 60 + (adminBidSeconds % 60)
+        )
+      }}
+      style={{ width: 80 }}
+    />
+    <span>min</span>
+
+    <input
+      type="number"
+      min={0}
+      max={59}
+      value={adminBidSeconds % 60}
+      onChange={(e) => {
+        const seconds = parseInt(e.target.value || '0', 10)
+        setAdminBidSeconds(
+          Math.floor(adminBidSeconds / 60) * 60 + seconds
+        )
+      }}
+      style={{ width: 80 }}
+    />
+    <span>sec</span>
+  </div>
+</label>
   </div>
 
   <div className="btn-row" style={{ marginTop: 12 }}>
@@ -1277,13 +1224,17 @@ return (
 </section>
       <section className="card">
   <h2>Admin: Import Teams</h2>
-  <p className="help">
-    Paste CSV with headers <b>name,budget,spots</b>. Example:
-    <br />
-    <code>name,budget,spots</code>
-    <br />
-    <code>Team A,200,21</code>
-  </p>
+<p className="help">
+  Paste a team list with 2 or 3 columns. Headers are optional.
+  <br />
+  Format: <b>name,budget,spots,code</b>
+  <br />
+  Examples:
+  <br />
+  <code>Team A,260,23,ABC123</code>
+  <br />
+  <code>Team B,260,23,EFG456</code>
+</p>
 
   <textarea
     style={{ width: '100%', height: 120, fontFamily: 'monospace' }}
@@ -1300,13 +1251,13 @@ return (
 <section className="card">
   <h2>Admin: Import Players</h2>
   <p className="help">
-    Paste CSV with headers <b>name,rating,position</b>. Rating/position are optional.
+    Paste a player list <b>name,primary,secondary</b>. spos is optional
     <br />
     Example:
     <br />
-    <code>name,rating,position</code>
+    <code>name,primary,secondary</code>
     <br />
-    <code>Player One,78,F</code>
+    <code>Player One,SS,3B</code>
   </p>
 
   <textarea

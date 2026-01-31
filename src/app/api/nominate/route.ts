@@ -50,17 +50,25 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'An open auction already exists for this player.' }, { status: 400 })
     }
 
-    // 3) Get nomination timer from settings
-    const settingsRes = await supabaseAdmin
-      .from('draft_settings')
-      .select('nomination_hours')
-      .eq('draft_id', draftId)
-      .maybeSingle()
+    // 3) Get nomination timer from settings (seconds-first)
+const settingsRes = await supabaseAdmin
+  .from('draft_settings')
+  .select('nomination_seconds, nomination_hours')
+  .eq('draft_id', draftId)
+  .maybeSingle()
 
-    if (settingsRes.error) return NextResponse.json({ error: settingsRes.error.message }, { status: 500 })
-    const nominationHours = Number(settingsRes.data?.nomination_hours ?? 12)
+if (settingsRes.error) return NextResponse.json({ error: settingsRes.error.message }, { status: 500 })
 
-    const endsAt = new Date(Date.now() + nominationHours * 60 * 60 * 1000).toISOString()
+const nominationSeconds =
+  settingsRes.data?.nomination_seconds != null
+    ? Number(settingsRes.data.nomination_seconds)
+    : Number(settingsRes.data?.nomination_hours ?? 12) * 3600
+
+if (!Number.isFinite(nominationSeconds) || nominationSeconds < 1) {
+  return NextResponse.json({ error: 'Invalid nomination timer setting.' }, { status: 400 })
+}
+
+const endsAt = new Date(Date.now() + nominationSeconds * 1000).toISOString()
 
     // 4) Create auction
     const insRes = await supabaseAdmin
