@@ -248,3 +248,154 @@ details.card[open] summary:before {
   color: var(--muted);
   font-size: 13px;
 }
+
+/* Draft action grid (Team / Nomination / Players / Bid) */
+.draft-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr; /* mobile default */
+}
+
+/* Tablet + desktop */
+@media (min-width: 768px) {
+  .draft-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-scroll .table {
+  min-width: 720px; /* forces scroll instead of squishing */
+}
+
+/* Make first column sticky so you always see the row label */
+.table-scroll .table th:first-child,
+.table-scroll .table td:first-child {
+  position: sticky;
+  left: 0;
+  background: white; /* or match your table background */
+  z-index: 1;
+}
+
+@media (max-width: 767px) {
+  .table td, .table th {
+    padding: 8px;
+    font-size: 14px;
+  }
+}
+
+/* Default: show tables, hide cards */
+.table-only { display: block; }
+.cards-only { display: none; }
+
+@media (max-width: 767px) {
+  /* Mobile: hide tables, show cards */
+  .table-only { display: none; }
+  .cards-only { display: block; }
+}
+
+/* Simple mobile card styling */
+.mobile-cards {
+  display: grid;
+  gap: 12px;
+}
+
+.mobile-card {
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 12px;
+  background: #fff;
+}
+
+.mobile-card-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.mobile-card-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 14px;
+}
+
+.mobile-card-label {
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.mobile-card-value {
+  text-align: right;
+  font-weight: 600;
+}
+
+button,
+.btn {
+  color: #111; /* dark text */
+}
+
+@media (max-width: 767px) {
+  button,
+  .btn {
+    color: #111 !important;
+    font-weight: 600;
+  }
+}
+
+.btn-primary {
+  background: #2563eb; /* blue */
+  color: #fff;
+}
+
+.btn-danger {
+  background: #dc2626; /* red */
+  color: #fff;
+}
+
+@media (max-width: 767px) {
+  .btn-primary,
+  .btn-danger {
+    color: #fff !important;
+  }
+}
+
+button,
+.btn {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 767px) {
+  .btn {
+    min-height: 44px;
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 767px) {
+  .bid-panel {
+    position: sticky;
+    top: 8px;
+    z-index: 10;
+
+    /* Make it feel like a pinned panel */
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 12px;
+    padding: 12px;
+
+    /* Helps avoid it looking cramped when it sticks */
+    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+  }
+}
+
+@media (max-width: 767px) {
+  .draft-grid {
+    overflow: visible;
+  }
+}

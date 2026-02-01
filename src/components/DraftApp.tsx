@@ -81,7 +81,7 @@ export default function DraftApp({ showAdmin }: { showAdmin: boolean }) {
 
   const [positionFilter, setPositionFilter] = useState('ALL')
 
-  const [bidAmount, setBidAmount] = useState<number>(1)
+  const [bidAmountText, setBidAmountText] = useState<string>('1')
   const [error, setError] = useState<string>('')
 
   const [nowTick, setNowTick] = useState(Date.now())
@@ -409,7 +409,7 @@ async function resetDraft() {
 
   setSelectedAuctionId('')
   setSelectedPlayerId('')
-  setBidAmount(1)
+  setBidAmountText('1')
   setPlayerSearch('')
 
   setError('Draft reset complete.')
@@ -583,7 +583,7 @@ const data = await res.json().catch(() => ({}))
 if (!res.ok) return setError(data?.error ?? 'Nomination failed.')
 
 setSelectedAuctionId(String(data.auction_id ?? ''))
-setBidAmount(1)
+setBidAmountText('1')
 await loadAll()
 }
 
@@ -595,7 +595,10 @@ await loadAll()
 }
   if (!selectedAuctionId) return setError('Select an auction to bid on.')
 if (!selectedTeamId) return setError(showAdmin ? 'Pick your team (who is bidding).' : 'Join your team first.')
-  if (!bidAmount || bidAmount <= 0) return setError('Enter a valid bid.')
+  const bidAmount = parseInt(bidAmountText, 10)
+if (!Number.isFinite(bidAmount) || bidAmount <= 0) {
+  return setError('Enter a valid bid.')
+}
 
   const auction = auctions.find(a => a.id === selectedAuctionId)
   if (!auction) return setError('Selected auction not found. Refresh and try again.')
@@ -613,12 +616,6 @@ if (!selectedTeamId) return setError(showAdmin ? 'Pick your team (who is bidding
   const available = teamAvailableBudgetForBid(team, auction)
 if (bidAmount > available) return setError(`Bid exceeds your available budget (${available}).`)
 
-  const bidHours = settings?.bid_hours ?? 12
-const minEndsMs = Date.now() + bidHours * 60 * 60 * 1000
-const currentEndsMs = new Date(auction.ends_at).getTime()
-const newEndsMs = Math.max(currentEndsMs, minEndsMs)
-const newEnds = new Date(newEndsMs)
-
 // Users: require team code. Admin: bidding as a team is disabled.
 let code = ''
 if (!showAdmin) {
@@ -632,11 +629,11 @@ const res = await fetch('/api/bid', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    draft_id: DRAFT_ID,
-    auction_id: selectedAuctionId,
-    team_code: code,
-    bid_amount: bidAmount,
-  }),
+  draft_id: DRAFT_ID,
+  auction_id: selectedAuctionId,
+  team_code: code,
+  bid_amount: bidAmount, // ✅ number, not string
+}),
 })
 
 const data = await res.json().catch(() => ({}))
@@ -845,130 +842,7 @@ return (
   </div>
 )}
 
-      <section className="card">
-  <h2 className="section-title">Pending Auctions</h2>
-
-  {auctions.length === 0 ? (
-    <p>None</p>
-  ) : (
-    <table className="table">
-      <thead>
-        <tr>
-          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Player</th>
-          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Pos</th>
-          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>High Bid</th>
-          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>High Team</th>
-          <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Ends</th>
-          {showAdmin && (
-  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Actions</th>
-)}
-        </tr>
-      </thead>
-      <tbody>
-        {auctions.map((a) => {
-          const p = players.find(pp => pp.id === a.player_id)
-          const pos1 = p?.metadata?.position_primary ?? ''
-          const pos2 = p?.metadata?.position_secondary ?? ''
-          const pos = pos2 ? `${pos1}, ${pos2}` : pos1
-          const highTeamName = a.high_team_id
-            ? (teams.find(t => t.id === a.high_team_id)?.name ?? 'Unknown')
-            : '—'
-          const ended = new Date(a.ends_at).getTime() <= nowTick
-
-          return (
-            <tr
-              key={a.id}
-              className={ended ? 'row-ended' : 'row-active'}
-              onClick={() => setSelectedAuctionId(a.id)}
-              style={{
-                cursor: 'pointer',
-                background: a.id === selectedAuctionId ? '#f2f2f2' : 'transparent'
-              }}
-            >
-              <td className="td-strong">{p?.name ?? '(missing player)'}</td>
-              <td className="td-strong">{pos || '—'}</td>
-              <td className="td-right td-strong">{a.high_bid}</td>
-              <td className="td-strong">{highTeamName}</td>
-              <td className="td-strong">
-{ended ? (
-  <span className="badge badge-ended">Ended</span>
-) : (
-  <span className="badge badge-live">
-    {formatRemaining(new Date(a.ends_at).getTime() - nowTick)}
-  </span>
-)}
-<div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-  {new Date(a.ends_at).toLocaleString()}
-</div>
-</td>
-{showAdmin && (
-  <td style={{ padding: '6px 4px' }}>
-    <div className="btn-row" style={{ display: 'flex', gap: 8 }}>
-      <button
-        className="btn"
-        onClick={(e) => {
-          e.stopPropagation()
-          finalizeNow(a.id)
-        }}
-        title="Finalize after ends_at"
-      >
-        Finalize
-      </button>
-
-      <button
-        className="btn btn-danger"
-        onClick={(e) => {
-          e.stopPropagation()
-          forceFinalizeNow(a.id)
-        }}
-        title="Admin override: finalize before ends_at"
-      >
-        Force Finalize
-      </button>
-    </div>
-  </td>
-)}
-            </tr>
-          )
-        })}
-      </tbody>
-    </table>
-  )}
-</section>
-
-<section className="card">
-  <h2 className="section-title">Teams Summary</h2>
-
-  <table className="table">
-    <thead>
-      <tr>
-        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Team</th>
-        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Budget Remaining</th>
-        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Committed (High Bids)</th>
-        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Available Budget</th>
-        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Roster Spots Left</th>
-      </tr>
-    </thead>
-    <tbody>
-      {teams.map((t) => {
-        const committed = teamCommittedHighBids(t.id)
-        const available = teamAvailableBudget(t)
-
-        return (
-          <tr key={t.id} style={{ background: t.id === selectedTeamId ? '#f2f2f2' : 'transparent' }}>
-            <td className="td-strong">{t.name}</td>
-            <td className="td-right td-strong">{t.budget_remaining}</td>
-            <td className="td-right td-strong">{committed}</td>
-            <td className="td-right td-strong">{available}</td>
-            <td className="td-right td-strong">{t.roster_spots_remaining}</td>
-          </tr>
-        )
-      })}
-    </tbody>
-  </table>
-</section>
-
-      <section style={{ display: 'grid', gap: 16, gridTemplateColumns: '1fr 1fr' }}>
+<section className="draft-grid">
         <div>
           <h2 className="section-title">Team</h2>
 
@@ -1058,7 +932,7 @@ return (
           <button className="btn btn-primary" style={{ marginTop: 8 }} onClick={nominate}>Nominate</button>
         </div>
 
-        <div>
+        <div className="bid-panel">
           <h2 className="section-title">Place a Bid</h2>
           <div style={{ marginBottom: 12 }}>
   <div className="stat">
@@ -1096,11 +970,22 @@ return (
           <label>
             Amount:{' '}
             <input
-              type="number"
-              min={1}
-              value={bidAmount}
-              onChange={(e) => setBidAmount(parseInt(e.target.value || '1', 10))}
-            />
+  type="text"
+  inputMode="numeric"
+  pattern="[0-9]*"
+  value={bidAmountText}
+  onChange={(e) => {
+    // allow only digits or empty string while editing
+    const next = e.target.value.replace(/[^\d]/g, '')
+    setBidAmountText(next)
+  }}
+  onFocus={(e) => {
+    // makes "type over 1" work nicely on mobile
+    // (setTimeout helps iOS Safari reliably select)
+    setTimeout(() => e.target.select(), 0)
+  }}
+  style={{ width: 110 }}
+/>
           </label>
           <div style={{ marginTop: 8 }}>
             <button
@@ -1116,6 +1001,230 @@ return (
           </div>
         </div>
       </section>
+
+      <section className="card">
+  <h2 className="section-title">Pending Auctions</h2>
+
+  {auctions.length === 0 ? (
+    <p>None</p>
+  ) : (
+    
+    <>
+  <div className="table-only">
+    <div className="table-scroll">
+      <table className="table">
+        <thead>
+          <tr>
+            <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Player</th>
+            <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Pos</th>
+            <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>High Bid</th>
+            <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>High Team</th>
+            <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Ends</th>
+            {showAdmin && (
+              <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Actions</th>
+            )}
+          </tr>
+        </thead>
+
+        <tbody>
+          {auctions.map((a) => {
+            const p = players.find((pp) => pp.id === a.player_id)
+            const pos1 = p?.metadata?.position_primary ?? ''
+            const pos2 = p?.metadata?.position_secondary ?? ''
+            const pos = pos2 ? `${pos1}, ${pos2}` : pos1
+
+            const highTeamName = a.high_team_id
+              ? (teams.find((t) => t.id === a.high_team_id)?.name ?? 'Unknown')
+              : '—'
+
+            const ended = new Date(a.ends_at).getTime() <= nowTick
+
+            return (
+              <tr
+                key={a.id}
+                className={ended ? 'row-ended' : 'row-active'}
+                onClick={() => setSelectedAuctionId(a.id)}
+                style={{
+                  cursor: 'pointer',
+                  background: a.id === selectedAuctionId ? '#f2f2f2' : 'transparent',
+                }}
+              >
+                <td className="td-strong">{p?.name ?? '(missing player)'}</td>
+                <td className="td-strong">{pos || '—'}</td>
+                <td className="td-right td-strong">{a.high_bid}</td>
+                <td className="td-strong">{highTeamName}</td>
+
+                <td className="td-strong">
+                  {ended ? (
+                    <span className="badge badge-ended">Ended</span>
+                  ) : (
+                    <span className="badge badge-live">
+                      {formatRemaining(new Date(a.ends_at).getTime() - nowTick)}
+                    </span>
+                  )}
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    {new Date(a.ends_at).toLocaleString()}
+                  </div>
+                </td>
+
+                {showAdmin && (
+                  <td style={{ padding: '6px 4px' }}>
+                    <div className="btn-row" style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        className="btn"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          finalizeNow(a.id)
+                        }}
+                        title="Finalize after ends_at"
+                      >
+                        Finalize
+                      </button>
+
+                      <button
+                        className="btn btn-danger"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          forceFinalizeNow(a.id)
+                        }}
+                        title="Admin override: finalize before ends_at"
+                      >
+                        Force Finalize
+                      </button>
+                    </div>
+                  </td>
+                )}
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div className="cards-only">
+    {auctions.length === 0 ? (
+      <p>None</p>
+    ) : (
+      <div className="mobile-cards">
+        {auctions.map((a) => {
+          const p = players.find((pp) => pp.id === a.player_id)
+          const pos1 = p?.metadata?.position_primary ?? ''
+          const pos2 = p?.metadata?.position_secondary ?? ''
+          const pos = pos2 ? `${pos1}, ${pos2}` : pos1
+
+          const highTeamName = a.high_team_id
+            ? (teams.find((t) => t.id === a.high_team_id)?.name ?? 'Unknown')
+            : '—'
+
+          const ended = new Date(a.ends_at).getTime() <= nowTick
+
+          return (
+            <div
+              key={a.id}
+              className="mobile-card"
+              onClick={() => setSelectedAuctionId(a.id)}
+              style={{
+                cursor: 'pointer',
+                borderColor: a.id === selectedAuctionId ? '#999' : '#ddd',
+              }}
+            >
+              <div className="mobile-card-title">{p?.name ?? '(missing player)'}</div>
+
+              <div className="mobile-card-row">
+                <span className="mobile-card-label">Pos</span>
+                <span className="mobile-card-value">{pos || '—'}</span>
+              </div>
+
+              <div className="mobile-card-row">
+                <span className="mobile-card-label">High Bid</span>
+                <span className="mobile-card-value">${a.high_bid ?? 0}</span>
+              </div>
+
+              <div className="mobile-card-row">
+                <span className="mobile-card-label">High Team</span>
+                <span className="mobile-card-value">{highTeamName}</span>
+              </div>
+
+              <div className="mobile-card-row">
+                <span className="mobile-card-label">Ends</span>
+                <span className="mobile-card-value">
+                  {ended ? 'Ended' : formatRemaining(new Date(a.ends_at).getTime() - nowTick)}
+                </span>
+              </div>
+
+              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+                {new Date(a.ends_at).toLocaleString()}
+              </div>
+
+              {showAdmin && (
+                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                  <button
+                    className="btn"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      finalizeNow(a.id)
+                    }}
+                  >
+                    Finalize
+                  </button>
+
+                  <button
+                    className="btn btn-danger"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      forceFinalizeNow(a.id)
+                    }}
+                  >
+                    Force Finalize
+                  </button>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    )}
+  </div>
+</>
+  )}
+</section>
+
+<section className="card">
+  <h2 className="section-title">Teams Summary</h2>
+
+  <div className="table-scroll">
+  <table className="table">
+    <thead>
+      <tr>
+        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Team</th>
+        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Budget Remaining</th>
+        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Committed (High Bids)</th>
+        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Available Budget</th>
+        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Roster Spots Left</th>
+      </tr>
+    </thead>
+    <tbody>
+      {teams.map((t) => {
+        const committed = teamCommittedHighBids(t.id)
+        const available = teamAvailableBudget(t)
+
+        return (
+          <tr key={t.id} style={{ background: t.id === selectedTeamId ? '#f2f2f2' : 'transparent' }}>
+            <td className="td-strong">{t.name}</td>
+            <td className="td-right td-strong">{t.budget_remaining}</td>
+            <td className="td-right td-strong">{committed}</td>
+            <td className="td-right td-strong">{available}</td>
+            <td className="td-right td-strong">{t.roster_spots_remaining}</td>
+          </tr>
+        )
+      })}
+    </tbody>
+  </table>
+</div>
+</section>
+
+      
 
       <section className="card">
         <h2 className="section-title">Drafted Players</h2>
