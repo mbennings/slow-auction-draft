@@ -399,3 +399,16 @@ button,
     overflow: visible;
   }
 }
+
+/* Default table alignment */
+.table th,
+.table td {
+  text-align: center;
+  vertical-align: middle;
+}
+
+/* First column left-aligned */
+.table th:first-child,
+.table td:first-child {
+  text-align: left;
+}

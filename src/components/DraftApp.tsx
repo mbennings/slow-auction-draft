@@ -150,6 +150,34 @@ const [playersCsv, setPlayersCsv] = useState(
 
   return false
 }
+
+const draftedExportRows = useMemo(() => {
+  const teamNameById = new Map(teams.map(t => [t.id, t.name]))
+
+  return players
+    .filter(p => !!p.drafted_by_team_id)
+    .slice()
+    .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
+    .map(p => {
+  const primary = String(p.metadata?.position_primary ?? '')
+  const secondary = String(p.metadata?.position_secondary ?? '')
+  const pos = secondary ? `${primary}, ${secondary}` : primary
+
+  const teamName = p.drafted_by_team_id
+    ? (teamNameById.get(p.drafted_by_team_id) ?? 'Unknown')
+    : ''
+
+  const bid = p.winning_bid ?? ''
+
+  return {
+    player_name: p.name ?? '',
+    pos,
+    team_drafted_by: teamName,
+    winning_bid: bid,
+  }
+})
+}, [players, teams])
+
  const filteredUndraftedPlayers = players
   .filter((p) => !p.drafted_by_team_id)
   .filter((p) => {
@@ -698,6 +726,25 @@ await loadAll()
   await loadAll()
 }
 
+function csvEscape(v: any) {
+  const s = String(v ?? '')
+  // Escape quotes and wrap in quotes if needed
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+  return s
+}
+
+function downloadTextFile(filename: string, content: string, mime = 'text/plain') {
+  const blob = new Blob([content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 async function autoFinalizeExpiredAuctionsFromDb() {
   setError('') // optional; remove if you don't want this to clear errors
 
@@ -753,6 +800,43 @@ async function autoFinalizeExpiredAuctions() {
 
   // Refresh after attempts
   await loadAll()
+}
+
+async function copyDraftedToClipboardTSV() {
+  const header = ['Player Name', 'Primary Position', 'Secondary Position', 'Team Drafted By', 'Winning Bid']
+  const lines = [
+    header.join('\t'),
+    ...draftedExportRows.map(r =>
+      [r.player_name, r.pos, r.team_drafted_by, r.winning_bid].join('\t')
+    ),
+  ]
+  const tsv = lines.join('\n')
+
+  try {
+    await navigator.clipboard.writeText(tsv)
+    setError('Copied drafted players to clipboard (paste into Google Sheets).')
+  } catch {
+    // Fallback: download TSV if clipboard blocked
+    downloadTextFile(`drafted-players-${DRAFT_ID}.tsv`, tsv, 'text/tab-separated-values')
+    setError('Clipboard blocked by browser. Downloaded TSV instead.')
+  }
+}
+
+function downloadDraftedCSV() {
+  const header = ['Player Name', 'Pos', 'Team Drafted By', 'Winning Bid']
+  const lines = [
+    header.map(csvEscape).join(','),
+    ...draftedExportRows.map(r =>
+      [
+        csvEscape(r.player_name),
+        csvEscape(r.pos),
+        csvEscape(r.team_drafted_by),
+        csvEscape(r.winning_bid),
+      ].join(',')
+    ),
+  ]
+  const csv = lines.join('\n')
+  downloadTextFile(`drafted-players-${DRAFT_ID}.csv`, csv, 'text/csv')
 }
 
 async function finalizeNow(auctionId: string) {
@@ -1016,12 +1100,12 @@ return (
         <thead>
           <tr>
             <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Player</th>
-            <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Pos</th>
-            <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>High Bid</th>
-            <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>High Team</th>
-            <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Ends</th>
+            <th style={{ borderBottom: '1px solid #ddd' }}>Pos</th>
+            <th style={{ borderBottom: '1px solid #ddd' }}>High Bid</th>
+            <th style={{ borderBottom: '1px solid #ddd' }}>High Team</th>
+            <th style={{ borderBottom: '1px solid #ddd' }}>Ends</th>
             {showAdmin && (
-              <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Actions</th>
+              <th style={{ borderBottom: '1px solid #ddd' }}>Actions</th>
             )}
           </tr>
         </thead>
@@ -1198,10 +1282,10 @@ return (
     <thead>
       <tr>
         <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Team</th>
-        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Budget Remaining</th>
-        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Committed (High Bids)</th>
-        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Available Budget</th>
-        <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Roster Spots Left</th>
+        <th style={{ borderBottom: '1px solid #ddd' }}>Budget Remaining</th>
+        <th style={{ borderBottom: '1px solid #ddd' }}>Committed (High Bids)</th>
+        <th style={{ borderBottom: '1px solid #ddd' }}>Available Budget</th>
+        <th style={{ borderBottom: '1px solid #ddd' }}>Roster Spots Left</th>
       </tr>
     </thead>
     <tbody>
@@ -1227,15 +1311,49 @@ return (
       
 
       <section className="card">
-        <h2 className="section-title">Drafted Players</h2>
-        <ul>
-          {players.filter(p => p.drafted_by_team_id).map(p => (
-            <li key={p.id}>
-              {p.name} — {teams.find(t => t.id === p.drafted_by_team_id)?.name ?? 'Unknown'} for {p.winning_bid}
-            </li>
+  <h2 className="section-title">Drafted Players</h2>
+
+  <div className="btn-row" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+    <button className="btn" onClick={copyDraftedToClipboardTSV} disabled={draftedExportRows.length === 0}>
+      Copy (Google Sheets)
+    </button>
+
+    <button className="btn" onClick={downloadDraftedCSV} disabled={draftedExportRows.length === 0}>
+      Download CSV
+    </button>
+
+    <div className="muted" style={{ fontSize: 12, alignSelf: 'center' }}>
+      Rows: {draftedExportRows.length}
+    </div>
+  </div>
+
+  {draftedExportRows.length === 0 ? (
+    <p>None</p>
+  ) : (
+    <div className="table-scroll">
+      <table className="table">
+        <thead>
+          <tr>
+            <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Player</th>
+            <th style={{ borderBottom: '1px solid #ddd' }}>Pos</th>
+            <th style={{ borderBottom: '1px solid #ddd' }}>Team</th>
+            <th style={{ borderBottom: '1px solid #ddd' }}>Winning Bid</th>
+          </tr>
+        </thead>
+        <tbody>
+          {draftedExportRows.map((r, idx) => (
+            <tr key={`${r.player_name}-${idx}`}>
+              <td className="td-strong">{r.player_name}</td>
+              <td>{r.pos || '—'}</td>
+              <td>{r.team_drafted_by || '—'}</td>
+              <td className="td-right td-strong">{r.winning_bid === '' ? '—' : r.winning_bid}</td>
+            </tr>
           ))}
-        </ul>
-      </section>
+        </tbody>
+      </table>
+    </div>
+  )}
+</section>
 
 
 {showAdmin && (
