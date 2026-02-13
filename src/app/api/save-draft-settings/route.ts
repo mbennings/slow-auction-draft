@@ -42,6 +42,10 @@ if (!Number.isFinite(bid_seconds) || bid_seconds < 0) {
     // optional: keep legacy hours in sync for readability/back-compat
     nomination_hours: Math.floor(nomination_seconds / 3600),
     bid_hours: Math.floor(bid_seconds / 3600),
+    quiet_hours_enabled: body?.quiet_hours_enabled ?? false,
+  quiet_start_minute: body?.quiet_start_minute ?? 1380,
+  quiet_end_minute: body?.quiet_end_minute ?? 600,
+  quiet_timezone: body?.quiet_timezone ?? 'America/New_York',
   },
   { onConflict: 'draft_id' }
 )

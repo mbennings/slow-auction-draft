@@ -33,20 +33,26 @@ type Auction = {
   id: string
   draft_id: string
   player_id: string
-  nominated_by_team_id: string
+  nominated_by_team_id: string | null
   high_bid: number
   high_team_id: string | null
   ends_at: string
   last_bid_at: string | null
   closed_at: string | null
+  paused: boolean
 }
 
 type DraftSettings = {
   draft_id: string
-  nomination_hours: number | null
-  bid_hours: number | null
-  nomination_seconds: number | null
-  bid_seconds: number | null
+  nomination_hours?: number | null
+  bid_hours?: number | null
+  nomination_seconds?: number | null
+  bid_seconds?: number | null
+
+  quiet_hours_enabled?: boolean | null
+  quiet_start_minute?: number | null
+  quiet_end_minute?: number | null
+  quiet_timezone?: string | null
 }
 
 const DRAFT_ID = process.env.NEXT_PUBLIC_DRAFT_ID ?? ''
@@ -92,6 +98,9 @@ const [lockedTeamId, setLockedTeamId] = useState<string>('')
   const [settings, setSettings] = useState<DraftSettings | null>(null)
   const [adminNominationSeconds, setAdminNominationSeconds] = useState<number>(12 * 3600)
 const [adminBidSeconds, setAdminBidSeconds] = useState<number>(12 * 3600)
+const [quietEnabled, setQuietEnabled] = useState<boolean>(false)
+const [quietStartTime, setQuietStartTime] = useState<string>('23:00')
+const [quietEndTime, setQuietEndTime] = useState<string>('10:00')
 
   useEffect(() => {
   const t = setInterval(() => setNowTick(Date.now()), 1000)
@@ -115,6 +124,20 @@ useEffect(() => {
   setAdminBidSeconds(
     settings.bid_seconds ?? (settings.bid_hours ?? 12) * 3600
   )
+  const enabled = !!settings.quiet_hours_enabled
+setQuietEnabled(enabled)
+
+const startMin = Number(settings.quiet_start_minute ?? 1380)
+const endMin = Number(settings.quiet_end_minute ?? 600)
+
+const toHHMM = (m: number) => {
+  const hh = String(Math.floor(m / 60)).padStart(2, '0')
+  const mm = String(m % 60).padStart(2, '0')
+  return `${hh}:${mm}`
+}
+
+setQuietStartTime(toHHMM(startMin))
+setQuietEndTime(toHHMM(endMin))
 }, [settings])
 
   const [teamsCsv, setTeamsCsv] = useState(
@@ -225,7 +248,7 @@ const [teamsRes, playersRes, auctionsRes, stateRes, settingsRes] = await Promise
 
   supabase
     .from('auctions')
-    .select('id,draft_id,player_id,nominated_by_team_id,high_bid,high_team_id,ends_at,last_bid_at,closed_at')
+    .select('id,draft_id,player_id,nominated_by_team_id,high_bid,high_team_id,ends_at,last_bid_at,closed_at,paused')
     .eq('draft_id', DRAFT_ID)
     .is('closed_at', null)
     .order('ends_at'),
@@ -238,7 +261,7 @@ const [teamsRes, playersRes, auctionsRes, stateRes, settingsRes] = await Promise
 
   supabase
   .from('draft_settings')
-  .select('draft_id,nomination_hours,bid_hours,nomination_seconds,bid_seconds')
+  .select('draft_id,nomination_hours,bid_hours,nomination_seconds,bid_seconds,quiet_hours_enabled,quiet_start_minute,quiet_end_minute,quiet_timezone')
   .eq('draft_id', DRAFT_ID)
   .single(),
 ])
@@ -345,14 +368,35 @@ async function saveDraftSettings() {
   draft_id: DRAFT_ID,
   nomination_seconds: adminNominationSeconds,
   bid_seconds: adminBidSeconds,
+
+  quiet_hours_enabled: quietEnabled,
+  quiet_start_minute: (() => {
+    const [h, m] = (quietStartTime || '23:00').split(':').map(Number)
+    return (Number.isFinite(h) ? h : 23) * 60 + (Number.isFinite(m) ? m : 0)
+  })(),
+  quiet_end_minute: (() => {
+    const [h, m] = (quietEndTime || '10:00').split(':').map(Number)
+    return (Number.isFinite(h) ? h : 10) * 60 + (Number.isFinite(m) ? m : 0)
+  })(),
+  quiet_timezone: 'America/New_York',
 }),
   })
 
   const data = await res.json().catch(() => ({}))
   if (!res.ok) return setError(data?.error ?? 'Save settings failed.')
 
-  setError('Saved timer settings.')
-  await loadAll()
+// Apply immediately so admin can unpause right away
+await fetch('/api/quiet-hours-tick', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'x-admin-code': adminCode,
+  },
+  body: JSON.stringify({ draft_id: DRAFT_ID }),
+})
+
+setError('Saved timer settings.')
+await loadAll()
 }
 
 async function forceFinalizeNow(auctionId: string) {
@@ -758,6 +802,7 @@ async function autoFinalizeExpiredAuctionsFromDb() {
     .select('id')
     .eq('draft_id', DRAFT_ID)
     .is('closed_at', null)
+    .eq('paused', false)
     .lte('ends_at', new Date().toISOString())
 
   if (expiredRes.error) {
@@ -1121,7 +1166,8 @@ return (
               ? (teams.find((t) => t.id === a.high_team_id)?.name ?? 'Unknown')
               : '—'
 
-            const ended = new Date(a.ends_at).getTime() <= nowTick
+            const paused = !!a.paused
+const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
 
             return (
               <tr
@@ -1139,13 +1185,15 @@ return (
                 <td className="td-strong">{highTeamName}</td>
 
                 <td className="td-strong">
-                  {ended ? (
-                    <span className="badge badge-ended">Ended</span>
-                  ) : (
-                    <span className="badge badge-live">
-                      {formatRemaining(new Date(a.ends_at).getTime() - nowTick)}
-                    </span>
-                  )}
+                  {paused ? (
+  <span className="badge badge-ended">Paused</span>
+) : ended ? (
+  <span className="badge badge-ended">Ended</span>
+) : (
+  <span className="badge badge-live">
+    {formatRemaining(new Date(a.ends_at).getTime() - nowTick)}
+  </span>
+)}
                   <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                     {new Date(a.ends_at).toLocaleString()}
                   </div>
@@ -1441,6 +1489,49 @@ return (
     <span>sec</span>
   </div>
 </label>
+   </div>
+
+  <hr style={{ margin: '16px 0' }} />
+
+  <h3 style={{ margin: '0 0 8px' }}>Quiet Hours (pause auctions)</h3>
+  <p className="help">
+    During quiet hours, all active auctions pause and resume when quiet hours end.
+    Times are in Eastern Time.
+  </p>
+
+  <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+    <input
+      type="checkbox"
+      checked={quietEnabled}
+      onChange={(e) => setQuietEnabled(e.target.checked)}
+    />
+    Enable quiet hours
+  </label>
+
+  <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
+    <label>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Quiet start (ET)
+      </div>
+      <input
+        type="time"
+        value={quietStartTime}
+        onChange={(e) => setQuietStartTime(e.target.value)}
+        style={{ width: '100%' }}
+      />
+    </label>
+
+    <label>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Quiet end (ET)
+      </div>
+      <input
+        type="time"
+        value={quietEndTime}
+        onChange={(e) => setQuietEndTime(e.target.value)}
+        style={{ width: '100%' }}
+      />
+    </label>
   </div>
 
   <div className="btn-row" style={{ marginTop: 12 }}>

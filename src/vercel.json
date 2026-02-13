@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/quiet-hours-cron?secret=${iruspocig8720alg6802}&draft_id=1afbd819-1840-47ef-bd6d-12c8e2cd697f",
+      "schedule": "*/1 * * * *"
+    }
+  ]
+}
