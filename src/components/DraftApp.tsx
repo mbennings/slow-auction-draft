@@ -89,6 +89,7 @@ export default function DraftApp({ showAdmin }: { showAdmin: boolean }) {
 
   const [bidAmountText, setBidAmountText] = useState<string>('1')
   const [error, setError] = useState<string>('')
+  const [theme, setTheme] = useState<'light' | 'dark'>('light')
 
   const [nowTick, setNowTick] = useState(Date.now())
 
@@ -106,6 +107,18 @@ const [quietEndTime, setQuietEndTime] = useState<string>('10:00')
   const t = setInterval(() => setNowTick(Date.now()), 1000)
   return () => clearInterval(t)
 }, [])
+
+useEffect(() => {
+  const saved = localStorage.getItem('draft_theme')
+  const nextTheme = saved === 'dark' ? 'dark' : 'light'
+  setTheme(nextTheme)
+  document.documentElement.setAttribute('data-theme', nextTheme)
+}, [])
+
+useEffect(() => {
+  document.documentElement.setAttribute('data-theme', theme)
+  localStorage.setItem('draft_theme', theme)
+}, [theme])
 
 useEffect(() => {
   if (showAdmin) return // admin doesn't need a locked team
@@ -918,9 +931,19 @@ return (
         <div className="header-meta">Draft: {DRAFT_ID ?? 'Missing'}</div>
       </div>
 
-      <div className="header-meta">
-        Pending: {auctions.length} • Teams: {teams.length} • Players: {players.length}
-      </div>
+      <div className="header-meta" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+  <span>
+    Pending: {auctions.length} • Teams: {teams.length} • Players: {players.length}
+  </span>
+
+  <button
+    className="btn"
+    onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+    type="button"
+  >
+    {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+  </button>
+</div>
     </div>
   </div>
 
@@ -1175,9 +1198,11 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
                 className={ended ? 'row-ended' : 'row-active'}
                 onClick={() => setSelectedAuctionId(a.id)}
                 style={{
-                  cursor: 'pointer',
-                  background: a.id === selectedAuctionId ? '#f2f2f2' : 'transparent',
-                }}
+  cursor: 'pointer',
+  background: a.id === selectedAuctionId
+    ? 'color-mix(in srgb, var(--card) 82%, var(--primary) 18%)'
+    : 'transparent',
+}}
               >
                 <td className="td-strong">{p?.name ?? '(missing player)'}</td>
                 <td className="td-strong">{pos || '—'}</td>
@@ -1342,7 +1367,15 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
         const available = teamAvailableBudget(t)
 
         return (
-          <tr key={t.id} style={{ background: t.id === selectedTeamId ? '#f2f2f2' : 'transparent' }}>
+          <tr
+  key={t.id}
+  style={{
+    background:
+      t.id === selectedTeamId
+        ? 'color-mix(in srgb, var(--card) 82%, var(--primary) 18%)'
+        : 'transparent',
+  }}
+>
             <td className="td-strong">{t.name}</td>
             <td className="td-right td-strong">{t.budget_remaining}</td>
             <td className="td-right td-strong">{committed}</td>
