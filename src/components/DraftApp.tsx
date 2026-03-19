@@ -48,6 +48,7 @@ type DraftSettings = {
   bid_hours?: number | null
   nomination_seconds?: number | null
   bid_seconds?: number | null
+  proxy_bidding_enabled?: boolean | null
 
   quiet_hours_enabled?: boolean | null
   quiet_start_minute?: number | null
@@ -88,6 +89,22 @@ export default function DraftApp({ showAdmin }: { showAdmin: boolean }) {
   const [positionFilter, setPositionFilter] = useState('ALL')
 
   const [bidAmountText, setBidAmountText] = useState<string>('1')
+  const [myProxyMax, setMyProxyMax] = useState<number | null>(null)
+const [myProxyStatus, setMyProxyStatus] = useState<'WINNING' | 'OUTBID' | null>(null)
+const [myActiveProxyBids, setMyActiveProxyBids] = useState<
+  Array<{
+    auction_id: string
+    player_id: string
+    player_name: string
+    pos: string
+    my_max_bid: number
+    current_high_bid: number
+    current_high_team_id: string | null
+    status: 'WINNING' | 'OUTBID'
+    needed_to_lead: number | null
+    ends_at: string
+  }>
+>([])
   const [error, setError] = useState<string>('')
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
 
@@ -97,9 +114,105 @@ export default function DraftApp({ showAdmin }: { showAdmin: boolean }) {
 const [lockedTeamId, setLockedTeamId] = useState<string>('')
 
   const [settings, setSettings] = useState<DraftSettings | null>(null)
+  useEffect(() => {
+  async function loadMyProxyStatus() {
+    if (!settings?.proxy_bidding_enabled) {
+      setMyProxyMax(null)
+      setMyProxyStatus(null)
+      return
+    }
+
+    if (!selectedAuctionId || !selectedTeamId) {
+      setMyProxyMax(null)
+      setMyProxyStatus(null)
+      return
+    }
+
+    const { data: proxyRow } = await supabase
+      .from('auction_proxy_bids')
+      .select('max_bid')
+      .eq('auction_id', selectedAuctionId)
+      .eq('team_id', selectedTeamId)
+      .maybeSingle()
+
+    const max = proxyRow?.max_bid ?? null
+    setMyProxyMax(max)
+
+    const auction = auctions.find((a) => a.id === selectedAuctionId)
+
+    if (auction && max != null) {
+      if (auction.high_team_id === selectedTeamId) {
+        setMyProxyStatus('WINNING')
+      } else {
+        setMyProxyStatus('OUTBID')
+      }
+    } else {
+      setMyProxyStatus(null)
+    }
+  }
+
+  loadMyProxyStatus()
+}, [selectedAuctionId, selectedTeamId, settings?.proxy_bidding_enabled, auctions])
+useEffect(() => {
+  async function loadMyActiveProxyBids() {
+    if (!settings?.proxy_bidding_enabled) {
+      setMyActiveProxyBids([])
+      return
+    }
+
+    if (!selectedTeamId || showAdmin) {
+      setMyActiveProxyBids([])
+      return
+    }
+
+    const { data: proxyRows, error } = await supabase
+      .from('auction_proxy_bids')
+      .select('auction_id, team_id, max_bid')
+      .eq('team_id', selectedTeamId)
+
+    if (error || !proxyRows) {
+      setMyActiveProxyBids([])
+      return
+    }
+
+    const rows = proxyRows
+      .map((row) => {
+        const auction = auctions.find((a) => a.id === row.auction_id && !a.closed_at)
+        if (!auction) return null
+
+        const player = players.find((p) => p.id === auction.player_id)
+        const pos1 = player?.metadata?.position_primary ?? ''
+        const pos2 = player?.metadata?.position_secondary ?? ''
+        const pos = pos2 ? `${pos1}, ${pos2}` : pos1
+
+        return {
+  auction_id: auction.id,
+  player_id: auction.player_id,
+  player_name: player?.name ?? '(missing player)',
+  pos,
+  my_max_bid: Number(row.max_bid ?? 0),
+  current_high_bid: Number(auction.high_bid ?? 0),
+  current_high_team_id: auction.high_team_id ?? null,
+  status: auction.high_team_id === selectedTeamId ? 'WINNING' as const : 'OUTBID' as const,
+  needed_to_lead:
+    auction.high_team_id === selectedTeamId
+      ? null
+      : Number(auction.high_bid ?? 0) + 1,
+  ends_at: auction.ends_at,
+}
+      })
+      .filter((x): x is NonNullable<typeof x> => !!x)
+      .sort((a, b) => a.player_name.localeCompare(b.player_name))
+
+    setMyActiveProxyBids(rows)
+  }
+
+  loadMyActiveProxyBids()
+}, [selectedTeamId, settings?.proxy_bidding_enabled, auctions, players, showAdmin])
   const [adminNominationSeconds, setAdminNominationSeconds] = useState<number>(12 * 3600)
 const [adminBidSeconds, setAdminBidSeconds] = useState<number>(12 * 3600)
 const [quietEnabled, setQuietEnabled] = useState<boolean>(false)
+const [proxyBiddingEnabled, setProxyBiddingEnabled] = useState<boolean>(false)
 const [quietStartTime, setQuietStartTime] = useState<string>('23:00')
 const [quietEndTime, setQuietEndTime] = useState<string>('10:00')
 
@@ -131,26 +244,31 @@ useEffect(() => {
 
 useEffect(() => {
   if (!settings) return
+
   setAdminNominationSeconds(
     settings.nomination_seconds ?? (settings.nomination_hours ?? 12) * 3600
   )
+
   setAdminBidSeconds(
     settings.bid_seconds ?? (settings.bid_hours ?? 12) * 3600
   )
+
   const enabled = !!settings.quiet_hours_enabled
-setQuietEnabled(enabled)
+  setQuietEnabled(enabled)
 
-const startMin = Number(settings.quiet_start_minute ?? 1380)
-const endMin = Number(settings.quiet_end_minute ?? 600)
+  const startMin = Number(settings.quiet_start_minute ?? 1380)
+  const endMin = Number(settings.quiet_end_minute ?? 600)
 
-const toHHMM = (m: number) => {
-  const hh = String(Math.floor(m / 60)).padStart(2, '0')
-  const mm = String(m % 60).padStart(2, '0')
-  return `${hh}:${mm}`
-}
+  const toHHMM = (m: number) => {
+    const hh = String(Math.floor(m / 60)).padStart(2, '0')
+    const mm = String(m % 60).padStart(2, '0')
+    return `${hh}:${mm}`
+  }
 
-setQuietStartTime(toHHMM(startMin))
-setQuietEndTime(toHHMM(endMin))
+  setQuietStartTime(toHHMM(startMin))
+  setQuietEndTime(toHHMM(endMin))
+
+  setProxyBiddingEnabled(!!settings.proxy_bidding_enabled)
 }, [settings])
 
   const [teamsCsv, setTeamsCsv] = useState(
@@ -186,7 +304,51 @@ const [playersCsv, setPlayersCsv] = useState(
 
   return false
 }
+const myProxyDashboardSummary = useMemo(() => {
+  if (!lockedTeamId || showAdmin) {
+    return {
+      budgetRemaining: 0,
+      committedMaxBids: 0,
+      availableToSpendNow: 0,
+    }
+  }
 
+  const team = teams.find((t) => t.id === lockedTeamId)
+  const budgetRemaining = Number(team?.budget_remaining ?? 0)
+
+  const committedMaxBids = myActiveProxyBids.reduce(
+    (sum, row) => sum + Number(row.my_max_bid ?? 0),
+    0
+  )
+
+  const availableToSpendNow = Math.max(0, budgetRemaining - committedMaxBids)
+
+  return {
+    budgetRemaining,
+    committedMaxBids,
+    availableToSpendNow,
+  }
+}, [lockedTeamId, showAdmin, teams, myActiveProxyBids])
+const myDraftedPlayers = useMemo(() => {
+  if (!lockedTeamId || showAdmin) return []
+
+  return players
+    .filter((p) => p.drafted_by_team_id === lockedTeamId)
+    .slice()
+    .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
+    .map((p) => {
+      const pos1 = String(p.metadata?.position_primary ?? '')
+      const pos2 = String(p.metadata?.position_secondary ?? '')
+      const pos = pos2 ? `${pos1}, ${pos2}` : pos1
+
+      return {
+        player_id: p.id,
+        player_name: p.name ?? '',
+        pos,
+        winning_bid: p.winning_bid ?? null,
+      }
+    })
+}, [players, lockedTeamId, showAdmin])
 const draftedExportRows = useMemo(() => {
   const teamNameById = new Map(teams.map(t => [t.id, t.name]))
 
@@ -274,7 +436,7 @@ const [teamsRes, playersRes, auctionsRes, stateRes, settingsRes] = await Promise
 
   supabase
   .from('draft_settings')
-  .select('draft_id,nomination_hours,bid_hours,nomination_seconds,bid_seconds,quiet_hours_enabled,quiet_start_minute,quiet_end_minute,quiet_timezone')
+  .select('draft_id,nomination_hours,bid_hours,nomination_seconds,bid_seconds,quiet_hours_enabled,quiet_start_minute,quiet_end_minute,quiet_timezone,proxy_bidding_enabled')
   .eq('draft_id', DRAFT_ID)
   .single(),
 ])
@@ -381,6 +543,8 @@ async function saveDraftSettings() {
   draft_id: DRAFT_ID,
   nomination_seconds: adminNominationSeconds,
   bid_seconds: adminBidSeconds,
+
+  proxy_bidding_enabled: proxyBiddingEnabled,
 
   quiet_hours_enabled: quietEnabled,
   quiet_start_minute: (() => {
@@ -550,7 +714,37 @@ async function importPlayersFromCsv() {
   setError(`Imported ${data?.count ?? 0} players.`)
   await loadAll()
 }
+function getSuggestedBidForAuction(auctionId: string) {
+  const auction = auctions.find((a) => a.id === auctionId)
+  if (!auction) return 1
 
+  const currentHighPlusOne = Number(auction.high_bid ?? 0) + 1
+
+  if (!settings?.proxy_bidding_enabled) {
+    return currentHighPlusOne
+  }
+
+  const myProxyRow = myActiveProxyBids.find((row) => row.auction_id === auctionId)
+  if (myProxyRow) {
+    return myProxyRow.my_max_bid + 1
+  }
+
+  return currentHighPlusOne
+}
+function selectAuctionAndPrefillBid(auctionId: string, suggestedBid: number | null) {
+  setSelectedAuctionId(auctionId)
+
+  if (suggestedBid != null && Number.isFinite(suggestedBid) && suggestedBid > 0) {
+    setBidAmountText(String(suggestedBid))
+    return
+  }
+
+  const auction = auctions.find((a) => a.id === auctionId)
+  if (!auction) return
+
+  const fallbackBid = Number(auction.high_bid ?? 0) + 1
+  setBidAmountText(String(fallbackBid))
+}
 function formatRemaining(ms: number) {
   if (ms <= 0) return '00:00'
 
@@ -948,8 +1142,6 @@ return (
   </div>
 
   <main className="container">
-      <h1 className="h1">Auction Draft</h1>
-      <p><b>Draft ID:</b> {DRAFT_ID ?? 'Missing'}</p>
       {!showAdmin && (
   <section className="card" style={{ marginTop: 12 }}>
     <h2 className="section-title">Join Your Team</h2>
@@ -995,38 +1187,8 @@ return (
 )}
 
 <section className="draft-grid">
-        <div>
-          <h2 className="section-title">Team</h2>
 
-{showAdmin ? (
-  <select value={selectedTeamId} onChange={(e) => setSelectedTeamId(e.target.value)}>
-    <option value="">-- Select your team --</option>
-    {teams.map(t => (
-      <option key={t.id} value={t.id}>
-        {t.name} (remaining: {t.budget_remaining})
-      </option>
-    ))}
-  </select>
-) : (
-  <div className="help">
-    {lockedTeamId
-      ? <>You are bidding as <b>{teams.find(t => t.id === lockedTeamId)?.name ?? 'Unknown'}</b>.</>
-      : <>Enter your team code above to join.</>}
-  </div>
-)}
-        </div>
-
-        <div>
-          <h2 className="section-title">Nomination Status</h2>
-          <p><b>Current:</b> {nominatedPlayer ? nominatedPlayer.name : 'None'}</p>
-          <p>
-            <b>High bid:</b> {state?.high_bid ?? 0}
-            {state?.high_team_id ? ` (team: ${teams.find(t => t.id === state.high_team_id)?.name ?? 'unknown'})` : ''}
-          </p>
-          <p><b>Ends at:</b> {state?.ends_at ? new Date(state.ends_at).toLocaleString() : '—'}</p>
-        </div>
-
-        <div>
+        <div className="card">
           <h2 className="section-title">Players (undrafted)</h2>
           <input
   type="text"
@@ -1081,36 +1243,89 @@ return (
 ))}
           </select>
 
-          <button className="btn btn-primary" style={{ marginTop: 8 }} onClick={nominate}>Nominate</button>
+          {showAdmin && (
+  <button className="btn btn-primary" style={{ marginTop: 8 }} onClick={nominate}>
+    Nominate
+  </button>
+)}
         </div>
 
-        <div className="bid-panel">
+        <div className="card bid-panel">
           <h2 className="section-title">Place a Bid</h2>
-          <div style={{ marginBottom: 12 }}>
-  <div className="stat">
-    <div className="stat-label">Selected Auction</div>
-    <div className="stat-value">
+          {proxyBiddingEnabled && myProxyMax != null && (
+  <div style={{ marginBottom: 12 }}>
+    <div className="muted">Your Max Bid</div>
+    <div style={{ fontWeight: 700 }}>${myProxyMax}</div>
+
+    <div style={{ marginTop: 4 }}>
+      {myProxyStatus === 'WINNING' && (
+        <span style={{ color: 'var(--success)', fontWeight: 600 }}>
+          Winning
+        </span>
+      )}
+      {myProxyStatus === 'OUTBID' && (
+        <span style={{ color: 'var(--danger)', fontWeight: 600 }}>
+          Outbid
+        </span>
+      )}
+    </div>
+  </div>
+)}
+          <div
+  style={{
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 12,
+    marginBottom: 16,
+  }}
+>
+  <div>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Selected Auction
+    </div>
+    <div style={{ fontWeight: 800, fontSize: 18 }}>
       {selectedAuctionPlayer ? selectedAuctionPlayer.name : 'None selected'}
     </div>
   </div>
 
-  <div className="stat">
-    <div className="stat-label">Current High Bid</div>
-    <div className={`stat-value ${selectedAuction?.high_bid ? 'primary' : ''}`}>
+  <div>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Current High Bid
+    </div>
+    <div
+      style={{
+        fontWeight: 800,
+        fontSize: 18,
+        color: selectedAuction?.high_bid ? 'var(--primary)' : 'var(--text)',
+      }}
+    >
       ${selectedAuction?.high_bid ?? 0}
     </div>
   </div>
 
-  <div className="stat">
-    <div className="stat-label">High Team</div>
-    <div className="stat-value">
+  <div>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      High Team
+    </div>
+    <div style={{ fontWeight: 800, fontSize: 18 }}>
       {selectedAuctionHighTeamName}
     </div>
   </div>
 
-  <div className="stat">
-    <div className="stat-label">Ends</div>
-    <div className={`stat-value ${selectedAuction && new Date(selectedAuction.ends_at).getTime() <= nowTick ? 'danger' : ''}`}>
+  <div>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Ends
+    </div>
+    <div
+      style={{
+        fontWeight: 800,
+        fontSize: 18,
+        color:
+          selectedAuction && new Date(selectedAuction.ends_at).getTime() <= nowTick
+            ? 'var(--danger)'
+            : 'var(--text)',
+      }}
+    >
       {selectedAuction
         ? (new Date(selectedAuction.ends_at).getTime() <= nowTick
           ? 'Ended'
@@ -1119,29 +1334,35 @@ return (
     </div>
   </div>
 </div>
-          <label>
-            Amount:{' '}
-            <input
-  type="text"
-  inputMode="numeric"
-  pattern="[0-9]*"
-  value={bidAmountText}
-  onChange={(e) => {
-    // allow only digits or empty string while editing
-    const next = e.target.value.replace(/[^\d]/g, '')
-    setBidAmountText(next)
-  }}
-  onFocus={(e) => {
-    // makes "type over 1" work nicely on mobile
-    // (setTimeout helps iOS Safari reliably select)
-    setTimeout(() => e.target.select(), 0)
-  }}
-  style={{ width: 110 }}
-/>
-          </label>
-          <div style={{ marginTop: 8 }}>
+
+<div style={{ marginTop: 4, marginBottom: 8 }}>
+  <div style={{ marginBottom: 6, fontWeight: 600 }}>
+    {settings?.proxy_bidding_enabled ? 'Max Bid:' : 'Amount:'}
+  </div>
+  <input
+    type="text"
+    inputMode="numeric"
+    pattern="[0-9]*"
+    value={bidAmountText}
+    onChange={(e) => {
+      const next = e.target.value.replace(/[^\d]/g, '')
+      setBidAmountText(next)
+    }}
+    onFocus={(e) => {
+      setTimeout(() => e.target.select(), 0)
+    }}
+    style={{ width: '100%', maxWidth: 220 }}
+  />
+</div>
+          {settings?.proxy_bidding_enabled && (
+  <div className="help" style={{ marginTop: 8 }}>
+    Enter your maximum bid. The app will only raise the visible price as much as needed.
+  </div>
+)}
+          <div style={{ marginTop: 12 }}>
             <button
   className="btn btn-primary"
+style={{ minWidth: 120 }}
   onClick={placeBid}
   disabled={
     !selectedTeamId ||
@@ -1196,7 +1417,7 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
               <tr
                 key={a.id}
                 className={ended ? 'row-ended' : 'row-active'}
-                onClick={() => setSelectedAuctionId(a.id)}
+                onClick={() => selectAuctionAndPrefillBid(a.id, getSuggestedBidForAuction(a.id))}
                 style={{
   cursor: 'pointer',
   background: a.id === selectedAuctionId
@@ -1280,7 +1501,7 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
             <div
               key={a.id}
               className="mobile-card"
-              onClick={() => setSelectedAuctionId(a.id)}
+              onClick={() => selectAuctionAndPrefillBid(a.id, getSuggestedBidForAuction(a.id))}
               style={{
                 cursor: 'pointer',
                 borderColor: a.id === selectedAuctionId ? '#999' : '#ddd',
@@ -1347,6 +1568,140 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
   )}
 </section>
 
+{!showAdmin && lockedTeamId && (
+  <section className="card">
+    <h2 className="section-title">Your Team Dashboard</h2>
+    <div className="help" style={{ marginBottom: 12 }}>
+  Team: <b>{teams.find((t) => t.id === lockedTeamId)?.name ?? 'Unknown'}</b>
+</div>
+    <div
+  style={{
+    display: 'grid',
+    gap: 12,
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    marginBottom: 16,
+  }}
+>
+  <div className="card" style={{ padding: 12 }}>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Budget Remaining
+    </div>
+    <div style={{ fontSize: 20, fontWeight: 800 }}>
+      {myProxyDashboardSummary.budgetRemaining}
+    </div>
+  </div>
+
+  <div className="card" style={{ padding: 12 }}>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Committed Max Bids
+    </div>
+    <div style={{ fontSize: 20, fontWeight: 800 }}>
+      {myProxyDashboardSummary.committedMaxBids}
+    </div>
+  </div>
+
+  <div className="card" style={{ padding: 12 }}>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Available to Spend Now
+    </div>
+    <div
+      style={{
+        fontSize: 20,
+        fontWeight: 800,
+        color:
+          myProxyDashboardSummary.availableToSpendNow > 0
+            ? 'var(--success)'
+            : 'var(--danger)',
+      }}
+    >
+      {myProxyDashboardSummary.availableToSpendNow}
+    </div>
+  </div>
+</div>
+
+    {settings?.proxy_bidding_enabled && (
+      <>
+        <h3 style={{ margin: '0 0 10px' }}>Your Active Max Bids</h3>
+
+        {myActiveProxyBids.length === 0 ? (
+          <p className="muted" style={{ marginBottom: 16 }}>No active proxy bids.</p>
+        ) : (
+          <div className="table-scroll" style={{ marginBottom: 20 }}>
+            <table className="table">
+              <thead>
+                <tr>
+  <th style={{ borderBottom: '1px solid #ddd' }}>Player</th>
+  <th style={{ borderBottom: '1px solid #ddd' }}>Pos</th>
+  <th style={{ borderBottom: '1px solid #ddd' }}>Your Max</th>
+  <th style={{ borderBottom: '1px solid #ddd' }}>Current High</th>
+  <th style={{ borderBottom: '1px solid #ddd' }}>Needed to Lead</th>
+  <th style={{ borderBottom: '1px solid #ddd' }}>Status</th>
+  <th style={{ borderBottom: '1px solid #ddd' }}>Ends</th>
+</tr>
+              </thead>
+              <tbody>
+                {myActiveProxyBids.map((row) => (
+                  <tr
+  key={row.auction_id}
+  onClick={() =>
+    selectAuctionAndPrefillBid(
+      row.auction_id,
+      row.needed_to_lead ?? row.my_max_bid + 1
+    )
+  }
+  style={{ cursor: 'pointer' }}
+>
+  <td className="td-strong">{row.player_name}</td>
+  <td>{row.pos || '—'}</td>
+  <td className="td-strong">{row.my_max_bid}</td>
+  <td>{row.current_high_bid}</td>
+  <td>{row.needed_to_lead ?? '—'}</td>
+  <td>
+    {row.status === 'WINNING' ? (
+      <span className="badge badge-live">Winning</span>
+    ) : (
+      <span className="badge badge-ended">Outbid</span>
+    )}
+  </td>
+  <td>{new Date(row.ends_at).toLocaleString()}</td>
+</tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </>
+    )}
+
+    <h3 style={{ margin: '0 0 10px' }}>Your Drafted Players</h3>
+
+    {myDraftedPlayers.length === 0 ? (
+      <p className="muted">No drafted players yet.</p>
+    ) : (
+      <div className="table-scroll">
+        <table className="table">
+          <thead>
+            <tr>
+              <th style={{ borderBottom: '1px solid #ddd' }}>Player</th>
+              <th style={{ borderBottom: '1px solid #ddd' }}>Pos</th>
+              <th style={{ borderBottom: '1px solid #ddd' }}>Winning Bid</th>
+            </tr>
+          </thead>
+          <tbody>
+            {myDraftedPlayers.map((row) => (
+              <tr key={row.player_id}>
+                <td className="td-strong">{row.player_name}</td>
+                <td>{row.pos || '—'}</td>
+                <td>{row.winning_bid ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </section>
+)}
+
 <section className="card">
   <h2 className="section-title">Teams Summary</h2>
 
@@ -1392,6 +1747,7 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
       
 
       <section className="card">
+        
   <h2 className="section-title">Drafted Players</h2>
 
   <div className="btn-row" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
@@ -1522,7 +1878,23 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
     <span>sec</span>
   </div>
 </label>
-   </div>
+     </div>
+
+  <hr style={{ margin: '16px 0' }} />
+
+  <h3 style={{ margin: '0 0 8px' }}>Proxy Bidding</h3>
+  <p className="help">
+    When enabled, teams enter a hidden maximum bid. The app automatically bids only as much as needed to keep them in the lead.
+  </p>
+
+  <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+    <input
+      type="checkbox"
+      checked={proxyBiddingEnabled}
+      onChange={(e) => setProxyBiddingEnabled(e.target.checked)}
+    />
+    Enable proxy bidding
+  </label>
 
   <hr style={{ margin: '16px 0' }} />
 

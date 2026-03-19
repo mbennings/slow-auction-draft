@@ -11,6 +11,8 @@ export async function POST(req: Request) {
 
   // 2) Parse body
   const body = await req.json().catch(() => null)
+  console.log('save-draft-settings body:', body)
+  
   if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
 
   const draft_id = String(body.draft_id ?? '').trim()
@@ -33,22 +35,26 @@ if (!Number.isFinite(bid_seconds) || bid_seconds < 0) {
 
   // 4) Upsert settings (draft_id should be unique / PK)
   const up = await supabaseAdmin
-    .from('draft_settings')
-    .upsert(
-  {
-    draft_id,
-    nomination_seconds,
-    bid_seconds,
-    // optional: keep legacy hours in sync for readability/back-compat
-    nomination_hours: Math.floor(nomination_seconds / 3600),
-    bid_hours: Math.floor(bid_seconds / 3600),
-    quiet_hours_enabled: body?.quiet_hours_enabled ?? false,
-  quiet_start_minute: body?.quiet_start_minute ?? 1380,
-  quiet_end_minute: body?.quiet_end_minute ?? 600,
-  quiet_timezone: body?.quiet_timezone ?? 'America/New_York',
-  },
-  { onConflict: 'draft_id' }
-)
+  .from('draft_settings')
+  .upsert(
+    {
+      draft_id,
+      nomination_seconds,
+      bid_seconds,
+
+      proxy_bidding_enabled: body?.proxy_bidding_enabled ?? false,
+
+      // optional: keep legacy hours in sync for readability/back-compat
+      nomination_hours: Math.floor(nomination_seconds / 3600),
+      bid_hours: Math.floor(bid_seconds / 3600),
+
+      quiet_hours_enabled: body?.quiet_hours_enabled ?? false,
+      quiet_start_minute: body?.quiet_start_minute ?? 1380,
+      quiet_end_minute: body?.quiet_end_minute ?? 600,
+      quiet_timezone: body?.quiet_timezone ?? 'America/New_York',
+    },
+    { onConflict: 'draft_id' }
+  )
 
   if (up.error) return NextResponse.json({ error: up.error.message }, { status: 400 })
 

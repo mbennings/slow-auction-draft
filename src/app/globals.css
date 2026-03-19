@@ -62,10 +62,15 @@ a {
   border-radius: var(--radius);
   padding: 16px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+  height: 100%;
 }
 
 .card + .card {
   margin-top: 16px;
+}
+
+.draft-grid .card + .card {
+  margin-top: 0;
 }
 
 .section-title {
@@ -291,7 +296,7 @@ details.card[open] summary:before {
 .header-inner {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 10px 24px;
+  padding: 8px 20px;
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -318,8 +323,18 @@ details.card[open] summary:before {
 /* Tablet + desktop */
 @media (min-width: 768px) {
   .draft-grid {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: stretch;
   }
+}
+
+.draft-grid > div {
+  min-width: 0;
+  width: 100%;
+}
+
+.draft-grid .section-title {
+  margin-bottom: 10px;
 }
 
 /* Scrollable tables */
@@ -430,16 +445,21 @@ button,
   }
 }
 
+.bid-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 /* Sticky bid panel on mobile */
 @media (max-width: 767px) {
   .bid-panel {
     position: sticky;
     top: 8px;
     z-index: 10;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 12px;
+    width: 100%;
+
+    /* Keep only enhancement */
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
   }
 
