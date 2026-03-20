@@ -3,16 +3,34 @@ import Papa from 'papaparse'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 const PRIMARY_POSITIONS = new Set([
-  'C','1B','2B','SS','3B','RF','CF','LF',
-  'SP','SP/RP','RP','CP',
+  'C', '1B', '2B', 'SS', '3B', 'RF', 'CF', 'LF',
+  'SP', 'SP/RP', 'RP', 'CP',
 ])
+
 const SECONDARY_POSITIONS = new Set([
-  'C','1B','2B','SS','3B','RF','CF','LF',
-  'IF','OF','IF/OF','1B/OF',
+  'C', '1B', '2B', 'SS', '3B', 'RF', 'CF', 'LF',
+  'IF', 'OF', 'IF/OF', '1B/OF',
 ])
 
 function normPos(s: unknown) {
   return String(s ?? '').trim().toUpperCase()
+}
+
+function normText(s: unknown) {
+  return String(s ?? '').trim()
+}
+
+function toKey(s: unknown) {
+  return String(s ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/_/g, '')
+}
+
+function toIntOrNull(s: unknown) {
+  const n = Number(String(s ?? '').trim())
+  return Number.isFinite(n) ? Math.round(n) : null
 }
 
 function isAdmin(req: Request) {
@@ -22,76 +40,128 @@ function isAdmin(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    if (!isAdmin(req)) return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 })
-
-    const body = await req.json()
-    const draftId = String(body?.draft_id ?? '')
-    const csv = String(body?.csv ?? '').trim()
-
-    if (!draftId) return NextResponse.json({ error: 'Missing draft_id.' }, { status: 400 })
-    if (!csv) return NextResponse.json({ error: 'Players list is empty.' }, { status: 400 })
-
-    const parsed = Papa.parse(csv, { header: false, skipEmptyLines: true })
-    if (parsed.errors.length) return NextResponse.json({ error: parsed.errors[0].message }, { status: 400 })
-
-    const rowsAny = parsed.data as any[]
-    if (!rowsAny.length) return NextResponse.json({ error: 'No rows found.' }, { status: 400 })
-
-    const firstRow = Array.isArray(rowsAny[0]) ? rowsAny[0].map((x: any) => String(x ?? '').trim()) : []
-    const firstLower = firstRow.map((s: string) => s.toLowerCase().replace(/\s+/g, '').replace(/_/g, ''))
-
-    const looksLikeHeader =
-      firstLower.includes('name') &&
-      (firstLower.includes('primary') ||
-        firstLower.includes('pos1') ||
-        firstLower.includes('positionprimary') ||
-        firstLower.includes('position_primary'))
-
-    let dataRows: any[] = rowsAny
-    let colIndex = { name: 0, primary: 1, secondary: 2 }
-
-    if (looksLikeHeader) {
-      const header = firstLower
-      const idx = (keys: string[]) => header.findIndex((h: string) => keys.includes(h))
-
-      const nameIdx = idx(['name'])
-      const primaryIdx = idx(['primary', 'pos1', 'positionprimary', 'position_primary'])
-      const secondaryIdx = idx(['secondary', 'pos2', 'positionsecondary', 'position_secondary'])
-
-      if (nameIdx === -1) return NextResponse.json({ error: 'Header must include "name".' }, { status: 400 })
-      if (primaryIdx === -1) return NextResponse.json({ error: 'Header must include "primary" (or pos1).' }, { status: 400 })
-
-      colIndex = { name: nameIdx, primary: primaryIdx, secondary: secondaryIdx === -1 ? -1 : secondaryIdx }
-      dataRows = rowsAny.slice(1)
+    if (!isAdmin(req)) {
+      return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 })
     }
 
-    const cleaned = dataRows
+    const body = await req.json()
+    const draftId = String(body?.draft_id ?? '').trim()
+    const csv = String(body?.csv ?? '').trim()
+
+    if (!draftId) {
+      return NextResponse.json({ error: 'Missing draft_id.' }, { status: 400 })
+    }
+    if (!csv) {
+      return NextResponse.json({ error: 'Players list is empty.' }, { status: 400 })
+    }
+
+    const parsed = Papa.parse(csv, {
+      header: true,
+      skipEmptyLines: true,
+      transformHeader: (h) => toKey(h),
+    })
+
+    if (parsed.errors.length) {
+      return NextResponse.json({ error: parsed.errors[0].message }, { status: 400 })
+    }
+
+    const rows = parsed.data as Record<string, unknown>[]
+    if (!rows.length) {
+      return NextResponse.json({ error: 'No rows found.' }, { status: 400 })
+    }
+
+    const cleaned = rows
       .map((row) => {
-        const arr = Array.isArray(row) ? row : []
-        const name = String(arr[colIndex.name] ?? '').trim()
-        const primary = normPos(arr[colIndex.primary])
-        const secondary = colIndex.secondary >= 0 ? normPos(arr[colIndex.secondary]) : ''
+        const name = normText(row.name)
+
+        const primaryRaw = row.ppos ?? row.primary ?? row.pos1 ?? row.positionprimary ?? row.positionprimary
+        const secondaryRaw = row.spos ?? row.secondary ?? row.pos2 ?? row.positionsecondary ?? row.positionsecondary
+        const roleRaw = row.role
+
+        const primary = normPos(primaryRaw || roleRaw)
+        const secondary = normPos(secondaryRaw)
 
         if (!name) return null
-        if (!primary) return { error: `Missing primary position for "${name}".` }
-        if (!PRIMARY_POSITIONS.has(primary)) return { error: `Invalid primary position "${primary}" for "${name}".` }
-        if (secondary && !SECONDARY_POSITIONS.has(secondary)) return { error: `Invalid secondary position "${secondary}" for "${name}".` }
+        if (!primary) return { error: `Missing primary position/role for "${name}".` }
+        if (!PRIMARY_POSITIONS.has(primary)) {
+          return { error: `Invalid primary position/role "${primary}" for "${name}".` }
+        }
+        if (secondary && !SECONDARY_POSITIONS.has(secondary)) {
+          return { error: `Invalid secondary position "${secondary}" for "${name}".` }
+        }
 
-        const metadata: any = { position_primary: primary }
+        const isPitcher = ['SP', 'SP/RP', 'RP', 'CP'].includes(primary)
+
+        const metadata: Record<string, unknown> = {
+          position_primary: primary,
+          player_type: isPitcher ? 'pitcher' : 'hitter',
+        }
+
         if (secondary) metadata.position_secondary = secondary
 
-        return { draft_id: draftId, name, metadata }
+        const arsenal = normText(row.arsenal)
+        if (arsenal) metadata.arsenal = arsenal
+
+        const pow = toIntOrNull(row.pow)
+        const con = toIntOrNull(row.con)
+        const spd = toIntOrNull(row.spd)
+        const fld = toIntOrNull(row.fld)
+        const arm = toIntOrNull(row.arm)
+        const vel = toIntOrNull(row.vel)
+        const jnk = toIntOrNull(row.jnk)
+        const acc = toIntOrNull(row.acc)
+        const age = toIntOrNull(row.age)
+
+        if (pow != null) metadata.pow = pow
+        if (con != null) metadata.con = con
+        if (spd != null) metadata.spd = spd
+        if (fld != null) metadata.fld = fld
+        if (arm != null) metadata.arm = arm
+        if (vel != null) metadata.vel = vel
+        if (jnk != null) metadata.jnk = jnk
+        if (acc != null) metadata.acc = acc
+        if (age != null) metadata.age = age
+
+        const trait1 = normText(row.trait1 ?? row.trait_1)
+        const trait2 = normText(row.trait2 ?? row.trait_2)
+        const batHand = normText(row.bathand ?? row.bat_hand)
+        const throwHand = normText(row.throwhand ?? row.throw_hand)
+
+        if (trait1) metadata.trait_1 = trait1
+        if (trait2) metadata.trait_2 = trait2
+        if (batHand) metadata.bat_hand = batHand
+        if (throwHand) metadata.throw_hand = throwHand
+
+        return {
+          draft_id: draftId,
+          name,
+          metadata,
+        }
       })
       .filter(Boolean)
 
-    const firstErr = (cleaned as any[]).find((x) => x?.error)?.error
-    if (firstErr) return NextResponse.json({ error: firstErr }, { status: 400 })
+    const firstErr = (cleaned as Array<{ error?: string }>).find((x) => x?.error)?.error
+    if (firstErr) {
+      return NextResponse.json({ error: firstErr }, { status: 400 })
+    }
 
-    const rowsToUpsert = cleaned as any[]
-    if (!rowsToUpsert.length) return NextResponse.json({ error: 'No valid player rows found.' }, { status: 400 })
+    const rowsToUpsert = cleaned as Array<{
+      draft_id: string
+      name: string
+      metadata: Record<string, unknown>
+    }>
 
-    const up = await supabaseAdmin.from('players').upsert(rowsToUpsert, { onConflict: 'draft_id,name' })
-    if (up.error) return NextResponse.json({ error: up.error.message }, { status: 500 })
+    if (!rowsToUpsert.length) {
+      return NextResponse.json({ error: 'No valid player rows found.' }, { status: 400 })
+    }
+
+    const up = await supabaseAdmin
+      .from('players')
+      .upsert(rowsToUpsert, { onConflict: 'draft_id,name' })
+
+    if (up.error) {
+      return NextResponse.json({ error: up.error.message }, { status: 500 })
+    }
 
     await supabaseAdmin.from('draft_events').insert({
       draft_id: draftId,

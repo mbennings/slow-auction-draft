@@ -73,6 +73,63 @@ function normPos(s: unknown) {
   return String(s ?? '').trim().toUpperCase()
 }
 
+function getRatingsSummary(p: Player | null) {
+  if (!p) return '—'
+
+  const primary = String(p.metadata?.position_primary ?? '').toUpperCase()
+  const secondary = String(p.metadata?.position_secondary ?? '').toUpperCase()
+  const isPitcher = ['SP', 'SP/RP', 'RP', 'CP'].includes(primary)
+
+  const trait1 = String(p.metadata?.trait_1 ?? '').trim()
+  const trait2 = String(p.metadata?.trait_2 ?? '').trim()
+  const batHand = String(p.metadata?.bat_hand ?? '').trim()
+  const throwHand = String(p.metadata?.throw_hand ?? '').trim()
+  const age = p.metadata?.age ?? '—'
+
+  if (isPitcher) {
+    const arsenal = String(p.metadata?.arsenal ?? '').trim()
+    const vel = p.metadata?.vel ?? '—'
+    const jnk = p.metadata?.jnk ?? '—'
+    const acc = p.metadata?.acc ?? '—'
+
+    const parts = [
+      primary || '—',
+      arsenal || '—',
+      `V-${vel}`,
+      `J-${jnk}`,
+      `A-${acc}`,
+      `T1-${trait1 || '—'}`,
+      `T2-${trait2 || '—'}`,
+      throwHand || '—',
+      String(age),
+    ]
+
+    return parts.join(' | ')
+  }
+
+  const pow = p.metadata?.pow ?? '—'
+  const con = p.metadata?.con ?? '—'
+  const spd = p.metadata?.spd ?? '—'
+  const fld = p.metadata?.fld ?? '—'
+  const arm = p.metadata?.arm ?? '—'
+
+  const parts = [
+    primary || '—',
+    secondary || '—',
+    `P-${pow}`,
+    `C-${con}`,
+    `S-${spd}`,
+    `F-${fld}`,
+    `A-${arm}`,
+    `T1-${trait1 || '—'}`,
+    `T2-${trait2 || '—'}`,
+    batHand || '—',
+    String(age),
+  ]
+
+  return parts.join(' | ')
+}
+
 export default function DraftApp({ showAdmin }: { showAdmin: boolean }) {
   const [teams, setTeams] = useState<Team[]>([])
   const [players, setPlayers] = useState<Player[]>([])
@@ -85,6 +142,10 @@ export default function DraftApp({ showAdmin }: { showAdmin: boolean }) {
   const [selectedPlayerId, setSelectedPlayerId] = useState('')
 
   const [playerSearch, setPlayerSearch] = useState('')
+  const [playerSortKey, setPlayerSortKey] = useState<
+  'name' | 'primary' | 'secondary' | 'pow' | 'con' | 'spd' | 'fld' | 'arm' | 'vel' | 'jnk' | 'acc' | 'trait1' | 'trait2' | 'hand' | 'age'
+>('name')
+const [playerSortDir, setPlayerSortDir] = useState<'asc' | 'desc'>('asc')
 
   const [positionFilter, setPositionFilter] = useState('ALL')
 
@@ -284,25 +345,50 @@ const [playersCsv, setPlayersCsv] = useState(
   const primary = String(p.metadata?.position_primary ?? '').toUpperCase()
   const secondary = String(p.metadata?.position_secondary ?? '').toUpperCase()
 
+  const pitcherRoles = ['SP', 'SP/RP', 'RP', 'CP']
+  const infieldPositions = ['1B', '2B', 'SS', '3B']
+  const outfieldPositions = ['LF', 'CF', 'RF']
 
-  // Direct matches
-  if (primary === t) return true
-  if (secondary === t) return true
+  const isPitcher = pitcherRoles.includes(primary)
+  const isHitter = !isPitcher
 
-  // Expand "group" secondaries
-  // IF can play 1B,2B,SS,3B
-  if (secondary === 'IF') return ['1B', '2B', 'SS', '3B'].includes(t)
+  const playablePositions = new Set<string>()
 
-  // OF can play RF,CF,LF
-  if (secondary === 'OF') return ['RF', 'CF', 'LF'].includes(t)
+  if (primary) playablePositions.add(primary)
+  if (secondary) playablePositions.add(secondary)
 
-  // IF/OF can play all except C
-  if (secondary === 'IF/OF') return t !== 'C'
+  // Expand grouped secondaries
+  if (secondary === 'IF') {
+    ;['1B', '2B', 'SS', '3B'].forEach((pos) => playablePositions.add(pos))
+  }
 
-  // 1B/OF can play 1B,RF,CF,LF
-  if (secondary === '1B/OF') return ['1B', 'RF', 'CF', 'LF'].includes(t)
+  if (secondary === 'OF') {
+    ;['LF', 'CF', 'RF'].forEach((pos) => playablePositions.add(pos))
+  }
 
-  return false
+  if (secondary === 'IF/OF') {
+    ;['1B', '2B', 'SS', '3B', 'LF', 'CF', 'RF'].forEach((pos) => playablePositions.add(pos))
+  }
+
+  if (secondary === '1B/OF') {
+    ;['1B', 'LF', 'CF', 'RF'].forEach((pos) => playablePositions.add(pos))
+  }
+
+  // Broad player-type filters
+  if (t === 'PITCHER') return isPitcher
+  if (t === 'HITTER') return isHitter
+
+  // Broad positional filters
+  if (t === 'IF') {
+    return Array.from(playablePositions).some((pos) => infieldPositions.includes(pos))
+  }
+
+  if (t === 'OF') {
+    return Array.from(playablePositions).some((pos) => outfieldPositions.includes(pos))
+  }
+
+  // Direct position / role match
+  return playablePositions.has(t)
 }
 const myProxyDashboardSummary = useMemo(() => {
   if (!lockedTeamId || showAdmin) {
@@ -317,9 +403,12 @@ const myProxyDashboardSummary = useMemo(() => {
   const budgetRemaining = Number(team?.budget_remaining ?? 0)
 
   const committedMaxBids = myActiveProxyBids.reduce(
-    (sum, row) => sum + Number(row.my_max_bid ?? 0),
-    0
-  )
+  (sum, row) =>
+    row.status === 'WINNING'
+      ? sum + Number(row.my_max_bid ?? 0)
+      : sum,
+  0
+)
 
   const availableToSpendNow = Math.max(0, budgetRemaining - committedMaxBids)
 
@@ -376,16 +465,92 @@ const draftedExportRows = useMemo(() => {
 })
 }, [players, teams])
 
- const filteredUndraftedPlayers = players
-  .filter((p) => !p.drafted_by_team_id)
-  .filter((p) => {
-    const name = (p.name ?? '').trim().toLowerCase()
-    const q = playerSearch.trim().toLowerCase()
-    return q === '' ? true : name.includes(q)
+ const filteredUndraftedPlayers = useMemo(() => {
+  const undrafted = players.filter((p) => !p.drafted_by_team_id)
+
+  const searched = undrafted.filter((p) => {
+    const name = String(p.name ?? '').toLowerCase()
+    const primary = String(p.metadata?.position_primary ?? '').toUpperCase()
+    const secondary = String(p.metadata?.position_secondary ?? '').toUpperCase()
+    const arsenal = String(p.metadata?.arsenal ?? '').toUpperCase()
+    const trait1 = String(p.metadata?.trait_1 ?? '').toLowerCase()
+    const trait2 = String(p.metadata?.trait_2 ?? '').toLowerCase()
+    const hand = String(p.metadata?.bat_hand ?? p.metadata?.throw_hand ?? '').toLowerCase()
+    const search = playerSearch.trim().toLowerCase()
+
+    const matchesSearch =
+      !search ||
+      name.includes(search) ||
+      primary.toLowerCase().includes(search) ||
+      secondary.toLowerCase().includes(search) ||
+      arsenal.toLowerCase().includes(search) ||
+      trait1.includes(search) ||
+      trait2.includes(search) ||
+      hand.includes(search)
+
+    const matchesPosition =
+      positionFilter === 'ALL' || playerCanPlayPosition(p, positionFilter)
+
+    return matchesSearch && matchesPosition
   })
-  .filter((p) => playerCanPlayPosition(p, positionFilter))
-  .slice()
-  .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
+
+  const getSortValue = (p: Player) => {
+    const primary = String(p.metadata?.position_primary ?? '')
+    const secondary = String(p.metadata?.position_secondary ?? p.metadata?.arsenal ?? '')
+    const hand = String(p.metadata?.bat_hand ?? p.metadata?.throw_hand ?? '')
+    const trait1 = String(p.metadata?.trait_1 ?? '')
+    const trait2 = String(p.metadata?.trait_2 ?? '')
+
+    switch (playerSortKey) {
+      case 'name':
+        return String(p.name ?? '').toLowerCase()
+      case 'primary':
+        return primary.toLowerCase()
+      case 'secondary':
+        return secondary.toLowerCase()
+      case 'pow':
+        return Number(p.metadata?.pow ?? -1)
+      case 'con':
+        return Number(p.metadata?.con ?? -1)
+      case 'spd':
+        return Number(p.metadata?.spd ?? -1)
+      case 'fld':
+        return Number(p.metadata?.fld ?? -1)
+      case 'arm':
+        return Number(p.metadata?.arm ?? -1)
+      case 'vel':
+        return Number(p.metadata?.vel ?? -1)
+      case 'jnk':
+        return Number(p.metadata?.jnk ?? -1)
+      case 'acc':
+        return Number(p.metadata?.acc ?? -1)
+      case 'trait1':
+        return trait1.toLowerCase()
+      case 'trait2':
+        return trait2.toLowerCase()
+      case 'hand':
+        return hand.toLowerCase()
+      case 'age':
+        return Number(p.metadata?.age ?? -1)
+      default:
+        return String(p.name ?? '').toLowerCase()
+    }
+  }
+
+  return searched.slice().sort((a, b) => {
+    const av = getSortValue(a)
+    const bv = getSortValue(b)
+
+    let cmp = 0
+    if (typeof av === 'number' && typeof bv === 'number') {
+      cmp = av - bv
+    } else {
+      cmp = String(av).localeCompare(String(bv))
+    }
+
+    return playerSortDir === 'asc' ? cmp : -cmp
+  })
+}, [players, playerSearch, positionFilter, playerSortKey, playerSortDir])
 
   const nominatedPlayer = useMemo(() => {
     if (!state?.nominated_player_id) return null
@@ -745,6 +910,18 @@ function selectAuctionAndPrefillBid(auctionId: string, suggestedBid: number | nu
   const fallbackBid = Number(auction.high_bid ?? 0) + 1
   setBidAmountText(String(fallbackBid))
 }
+
+function togglePlayerSort(
+  nextKey: 'name' | 'primary' | 'secondary' | 'pow' | 'con' | 'spd' | 'fld' | 'arm' | 'vel' | 'jnk' | 'acc' | 'trait1' | 'trait2' | 'hand' | 'age'
+) {
+  if (playerSortKey === nextKey) {
+    setPlayerSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+  } else {
+    setPlayerSortKey(nextKey)
+    setPlayerSortDir('asc')
+  }
+}
+
 function formatRemaining(ms: number) {
   if (ms <= 0) return '00:00'
 
@@ -1188,7 +1365,7 @@ return (
 
 <section className="draft-grid">
 
-        <div className="card">
+        <div className="card" style={{ gridColumn: '1 / -1' }}>
           <h2 className="section-title">Players (undrafted)</h2>
           <input
   type="text"
@@ -1222,26 +1399,86 @@ return (
     style={{ marginLeft: 8 }}
   >
     <option value="ALL">All</option>
-    <option value="C">C</option>
-    <option value="1B">1B</option>
-    <option value="2B">2B</option>
-    <option value="SS">SS</option>
-    <option value="3B">3B</option>
-    <option value="LF">LF</option>
-    <option value="CF">CF</option>
-    <option value="RF">RF</option>
+<option value="HITTER">Hitters</option>
+<option value="PITCHER">Pitchers</option>
+<option value="C">C</option>
+<option value="IF">IF</option>
+<option value="OF">OF</option>
+<option value="1B">1B</option>
+<option value="2B">2B</option>
+<option value="SS">SS</option>
+<option value="3B">3B</option>
+<option value="LF">LF</option>
+<option value="CF">CF</option>
+<option value="RF">RF</option>
+<option value="SP">SP</option>
+<option value="SP/RP">SP/RP</option>
+<option value="RP">RP</option>
+<option value="CP">CP</option>
   </select>
 </label>
-          <select value={selectedPlayerId} onChange={(e) => setSelectedPlayerId(e.target.value)}>
-            <option value="">-- Select a player --</option>
-{filteredUndraftedPlayers.map((p) => (
-  <option key={p.id} value={p.id}>
-   {p.name}
-{p.metadata?.position_primary ? ` — ${p.metadata.position_primary}` : ''}
-{p.metadata?.position_secondary ? `, ${p.metadata.position_secondary}` : ''}
-  </option>
-))}
-          </select>
+<div className="table-scroll undrafted-table-scroll" style={{ marginTop: 8 }}>
+  <table className="table">
+    <thead>
+      <tr>
+        <th style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => togglePlayerSort('name')}>Name</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('primary')}>PPos/Role</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('secondary')}>SPos/Arsenal</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('pow')}>POW</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('con')}>CON</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('spd')}>SPD</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('fld')}>FLD</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('arm')}>ARM</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('vel')}>VEL</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('jnk')}>JNK</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('acc')}>ACC</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('trait1')}>Trait 1</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('trait2')}>Trait 2</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('hand')}>Hand</th>
+        <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('age')}>Age</th>
+      </tr>
+    </thead>
+    <tbody>
+      {filteredUndraftedPlayers.map((p) => {
+        const primary = String(p.metadata?.position_primary ?? '')
+        const secondaryOrArsenal = String(
+          p.metadata?.position_secondary ?? p.metadata?.arsenal ?? ''
+        )
+        const hand = String(p.metadata?.bat_hand ?? p.metadata?.throw_hand ?? '')
+
+        return (
+          <tr
+            key={p.id}
+            onClick={() => setSelectedPlayerId(p.id)}
+            style={{
+              cursor: 'pointer',
+              background:
+                p.id === selectedPlayerId
+                  ? 'color-mix(in srgb, var(--card) 82%, var(--primary) 18%)'
+                  : 'transparent',
+            }}
+          >
+            <td className="td-strong">{p.name}</td>
+            <td>{primary || '—'}</td>
+            <td>{secondaryOrArsenal || '—'}</td>
+            <td>{p.metadata?.pow ?? '—'}</td>
+            <td>{p.metadata?.con ?? '—'}</td>
+            <td>{p.metadata?.spd ?? '—'}</td>
+            <td>{p.metadata?.fld ?? '—'}</td>
+            <td>{p.metadata?.arm ?? '—'}</td>
+            <td>{p.metadata?.vel ?? '—'}</td>
+            <td>{p.metadata?.jnk ?? '—'}</td>
+            <td>{p.metadata?.acc ?? '—'}</td>
+            <td>{p.metadata?.trait_1 ?? '—'}</td>
+            <td>{p.metadata?.trait_2 ?? '—'}</td>
+            <td>{hand || '—'}</td>
+            <td>{p.metadata?.age ?? '—'}</td>
+          </tr>
+        )
+      })}
+    </tbody>
+  </table>
+</div>
 
           {showAdmin && (
   <button className="btn btn-primary" style={{ marginTop: 8 }} onClick={nominate}>
@@ -1388,23 +1625,21 @@ style={{ minWidth: 120 }}
       <table className="table">
         <thead>
           <tr>
-            <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Player</th>
-            <th style={{ borderBottom: '1px solid #ddd' }}>Pos</th>
-            <th style={{ borderBottom: '1px solid #ddd' }}>High Bid</th>
-            <th style={{ borderBottom: '1px solid #ddd' }}>High Team</th>
-            <th style={{ borderBottom: '1px solid #ddd' }}>Ends</th>
-            {showAdmin && (
-              <th style={{ borderBottom: '1px solid #ddd' }}>Actions</th>
-            )}
-          </tr>
+  <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>Player</th>
+  <th style={{ borderBottom: '1px solid #ddd' }}>Ratings</th>
+  <th style={{ borderBottom: '1px solid #ddd' }}>High Bid</th>
+  <th style={{ borderBottom: '1px solid #ddd' }}>High Team</th>
+  <th style={{ borderBottom: '1px solid #ddd' }}>Ends</th>
+  {showAdmin && (
+    <th style={{ borderBottom: '1px solid #ddd' }}>Actions</th>
+  )}
+</tr>
         </thead>
 
         <tbody>
           {auctions.map((a) => {
             const p = players.find((pp) => pp.id === a.player_id)
-            const pos1 = p?.metadata?.position_primary ?? ''
-            const pos2 = p?.metadata?.position_secondary ?? ''
-            const pos = pos2 ? `${pos1}, ${pos2}` : pos1
+            const ratingsSummary = getRatingsSummary(p ?? null)
 
             const highTeamName = a.high_team_id
               ? (teams.find((t) => t.id === a.high_team_id)?.name ?? 'Unknown')
@@ -1426,9 +1661,9 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
 }}
               >
                 <td className="td-strong">{p?.name ?? '(missing player)'}</td>
-                <td className="td-strong">{pos || '—'}</td>
-                <td className="td-right td-strong">{a.high_bid}</td>
-                <td className="td-strong">{highTeamName}</td>
+<td style={{ fontSize: 12 }}>{ratingsSummary}</td>
+<td className="td-right td-strong">{a.high_bid}</td>
+<td className="td-strong">{highTeamName}</td>
 
                 <td className="td-strong">
                   {paused ? (
@@ -1510,9 +1745,11 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
               <div className="mobile-card-title">{p?.name ?? '(missing player)'}</div>
 
               <div className="mobile-card-row">
-                <span className="mobile-card-label">Pos</span>
-                <span className="mobile-card-value">{pos || '—'}</span>
-              </div>
+  <span className="mobile-card-label">Ratings</span>
+  <span className="mobile-card-value" style={{ fontSize: 12 }}>
+    {getRatingsSummary(p ?? null)}
+  </span>
+</div>
 
               <div className="mobile-card-row">
                 <span className="mobile-card-label">High Bid</span>
