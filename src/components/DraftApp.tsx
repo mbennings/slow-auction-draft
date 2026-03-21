@@ -40,6 +40,7 @@ type Auction = {
   last_bid_at: string | null
   closed_at: string | null
   paused: boolean
+    paused_remaining_seconds?: number | null
 }
 
 type DraftSettings = {
@@ -588,7 +589,7 @@ const [teamsRes, playersRes, auctionsRes, stateRes, settingsRes] = await Promise
 
   supabase
     .from('auctions')
-    .select('id,draft_id,player_id,nominated_by_team_id,high_bid,high_team_id,ends_at,last_bid_at,closed_at,paused')
+    .select('id,draft_id,player_id,nominated_by_team_id,high_bid,high_team_id,ends_at,created_at,last_bid_at,closed_at,paused,paused_remaining_seconds')
     .eq('draft_id', DRAFT_ID)
     .is('closed_at', null)
     .order('ends_at'),
@@ -1666,19 +1667,24 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
 <td className="td-strong">{highTeamName}</td>
 
                 <td className="td-strong">
-                  {paused ? (
-  <span className="badge badge-ended">Paused</span>
-) : ended ? (
-  <span className="badge badge-ended">Ended</span>
-) : (
-  <span className="badge badge-live">
-    {formatRemaining(new Date(a.ends_at).getTime() - nowTick)}
-  </span>
-)}
-                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                    {new Date(a.ends_at).toLocaleString()}
-                  </div>
-                </td>
+  {paused ? (
+    <span className="badge badge-ended">
+      Paused • {formatRemaining((Number(a.paused_remaining_seconds ?? 0)) * 1000)}
+    </span>
+  ) : ended ? (
+    <span className="badge badge-ended">Ended</span>
+  ) : (
+    <span className="badge badge-live">
+      {formatRemaining(new Date(a.ends_at).getTime() - nowTick)}
+    </span>
+  )}
+
+  {!paused && (
+    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+      {new Date(a.ends_at).toLocaleString()}
+    </div>
+  )}
+</td>
 
                 {showAdmin && (
                   <td style={{ padding: '6px 4px' }}>
@@ -1762,15 +1768,21 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
               </div>
 
               <div className="mobile-card-row">
-                <span className="mobile-card-label">Ends</span>
-                <span className="mobile-card-value">
-                  {ended ? 'Ended' : formatRemaining(new Date(a.ends_at).getTime() - nowTick)}
-                </span>
-              </div>
+  <span className="mobile-card-label">Ends</span>
+  <span className="mobile-card-value">
+    {a.paused
+      ? `Paused • ${formatRemaining((Number(a.paused_remaining_seconds ?? 0)) * 1000)}`
+      : ended
+        ? 'Ended'
+        : formatRemaining(new Date(a.ends_at).getTime() - nowTick)}
+  </span>
+</div>
 
-              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-                {new Date(a.ends_at).toLocaleString()}
-              </div>
+{!a.paused && (
+  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+    {new Date(a.ends_at).toLocaleString()}
+  </div>
+)}
 
               {showAdmin && (
                 <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
