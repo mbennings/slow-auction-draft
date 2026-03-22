@@ -843,15 +843,29 @@ function teamAvailableBudget(team: Team) {
 }
 
 function teamAvailableBudgetForBid(team: Team, auction: Auction) {
-  // Total currently committed to active high bids by this team
-  const committed = teamCommittedHighBids(team.id)
+  const winningOpenAuctions = auctions.filter(
+    (a) =>
+      !a.closed_at &&
+      a.high_team_id === team.id
+  )
 
-  // If this team is already the high bidder on THIS auction,
-  // their committed amount already includes auction.high_bid.
-  // When they raise their bid, they should "get credit" for that existing commitment.
-  const credit = auction.high_team_id === team.id ? (auction.high_bid ?? 0) : 0
+  const committedOther = winningOpenAuctions
+    .filter((a) => a.id !== auction.id)
+    .reduce((sum, a) => sum + Number(a.high_bid ?? 0), 0)
 
-  return Math.max(0, (team.budget_remaining ?? 0) - (committed - credit))
+  const winningOtherCount = winningOpenAuctions
+    .filter((a) => a.id !== auction.id)
+    .length
+
+  const minReserve = Math.max(
+    0,
+    Number(team.roster_spots_remaining ?? 0) - winningOtherCount - 1
+  )
+
+  return Math.max(
+    0,
+    Number(team.budget_remaining ?? 0) - committedOther - minReserve
+  )
 }
 
 async function importPlayersFromCsv() {
