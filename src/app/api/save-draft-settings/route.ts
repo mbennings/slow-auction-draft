@@ -43,6 +43,7 @@ if (!Number.isFinite(bid_seconds) || bid_seconds < 0) {
       bid_seconds,
 
       proxy_bidding_enabled: body?.proxy_bidding_enabled ?? false,
+      min_bid_reserve_enabled: body?.min_bid_reserve_enabled ?? true,
 
       // optional: keep legacy hours in sync for readability/back-compat
       nomination_hours: Math.floor(nomination_seconds / 3600),

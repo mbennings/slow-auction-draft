@@ -50,6 +50,7 @@ type DraftSettings = {
   nomination_seconds?: number | null
   bid_seconds?: number | null
   proxy_bidding_enabled?: boolean | null
+  min_bid_reserve_enabled?: boolean | null
 
   quiet_hours_enabled?: boolean | null
   quiet_start_minute?: number | null
@@ -158,12 +159,12 @@ const [myActiveProxyBids, setMyActiveProxyBids] = useState<
     auction_id: string
     player_id: string
     player_name: string
+    ratings_summary: string
     pos: string
     my_max_bid: number
     current_high_bid: number
     current_high_team_id: string | null
     status: 'WINNING' | 'OUTBID'
-    needed_to_lead: number | null
     ends_at: string
   }>
 >([])
@@ -246,20 +247,19 @@ useEffect(() => {
         const pos1 = player?.metadata?.position_primary ?? ''
         const pos2 = player?.metadata?.position_secondary ?? ''
         const pos = pos2 ? `${pos1}, ${pos2}` : pos1
+        const ratingsSummary = getRatingsSummary(player ?? null)
+        
 
         return {
   auction_id: auction.id,
   player_id: auction.player_id,
   player_name: player?.name ?? '(missing player)',
+  ratings_summary: ratingsSummary,
   pos,
   my_max_bid: Number(row.max_bid ?? 0),
   current_high_bid: Number(auction.high_bid ?? 0),
   current_high_team_id: auction.high_team_id ?? null,
   status: auction.high_team_id === selectedTeamId ? 'WINNING' as const : 'OUTBID' as const,
-  needed_to_lead:
-    auction.high_team_id === selectedTeamId
-      ? null
-      : Number(auction.high_bid ?? 0) + 1,
   ends_at: auction.ends_at,
 }
       })
@@ -275,8 +275,35 @@ useEffect(() => {
 const [adminBidSeconds, setAdminBidSeconds] = useState<number>(12 * 3600)
 const [quietEnabled, setQuietEnabled] = useState<boolean>(false)
 const [proxyBiddingEnabled, setProxyBiddingEnabled] = useState<boolean>(false)
+const [minBidReserveEnabled, setMinBidReserveEnabled] = useState<boolean>(true)
 const [quietStartTime, setQuietStartTime] = useState<string>('23:00')
 const [quietEndTime, setQuietEndTime] = useState<string>('10:00')
+const [adminSelectedAuctionId, setAdminSelectedAuctionId] = useState('')
+const [adminAuctionReason, setAdminAuctionReason] = useState('')
+const [adminSelectedBidTeamId, setAdminSelectedBidTeamId] = useState('')
+const [adminAuctionBidRows, setAdminAuctionBidRows] = useState<
+  Array<{
+    team_id: string
+    team_name: string
+    max_bid: number
+  }>
+>([])
+const [adminManualBidTeamId, setAdminManualBidTeamId] = useState('')
+const [adminManualBidAmount, setAdminManualBidAmount] = useState<string>('')
+const [adminSelectedTeamId, setAdminSelectedTeamId] = useState('')
+const [adminTeamName, setAdminTeamName] = useState('')
+const [adminTeamJoinCode, setAdminTeamJoinCode] = useState('')
+const [adminTeamBudgetRemaining, setAdminTeamBudgetRemaining] = useState<string>('')
+const [adminTeamRosterSpotsTotal, setAdminTeamRosterSpotsTotal] = useState<string>('')
+const [adminTeamRosterSpotsRemaining, setAdminTeamRosterSpotsRemaining] = useState<string>('')
+const [adminTeamReason, setAdminTeamReason] = useState('')
+const [adminNewTeamName, setAdminNewTeamName] = useState('')
+const [adminNewTeamJoinCode, setAdminNewTeamJoinCode] = useState('')
+const [adminNewTeamBudgetRemaining, setAdminNewTeamBudgetRemaining] = useState<string>('200')
+const [adminNewTeamRosterSpotsTotal, setAdminNewTeamRosterSpotsTotal] = useState<string>('23')
+const [adminNewTeamRosterSpotsRemaining, setAdminNewTeamRosterSpotsRemaining] = useState<string>('23')
+const [adminNewTeamReason, setAdminNewTeamReason] = useState('')
+const [adminTimerMinutes, setAdminTimerMinutes] = useState<string>('360')
 
   useEffect(() => {
   const t = setInterval(() => setNowTick(Date.now()), 1000)
@@ -305,6 +332,70 @@ useEffect(() => {
 }, [showAdmin])
 
 useEffect(() => {
+  async function loadAdminAuctionBidRows() {
+    if (!showAdmin) {
+      setAdminAuctionBidRows([])
+      return
+    }
+
+    const auctionId = adminSelectedAuctionId || selectedAuctionId
+    if (!auctionId) {
+      setAdminAuctionBidRows([])
+      return
+    }
+
+    const { data, error } = await supabase
+      .from('auction_proxy_bids')
+      .select('team_id,max_bid')
+      .eq('auction_id', auctionId)
+      .order('max_bid', { ascending: false })
+
+    if (error || !data) {
+      setAdminAuctionBidRows([])
+      return
+    }
+
+    const rows = data.map((row) => ({
+      team_id: String(row.team_id),
+      team_name: teams.find((t) => t.id === row.team_id)?.name ?? 'Unknown Team',
+      max_bid: Number(row.max_bid ?? 0),
+    }))
+
+    setAdminAuctionBidRows(rows)
+
+    if (!rows.some((r) => r.team_id === adminSelectedBidTeamId)) {
+      setAdminSelectedBidTeamId('')
+    }
+        if (!teams.some((t) => t.id === adminManualBidTeamId)) {
+      setAdminManualBidTeamId('')
+    }
+  }
+
+  loadAdminAuctionBidRows()
+}, [showAdmin, adminSelectedAuctionId, selectedAuctionId, teams, adminSelectedBidTeamId])
+
+useEffect(() => {
+  if (!showAdmin) return
+
+  const team = teams.find((t) => t.id === adminSelectedTeamId)
+
+  if (!team) {
+    setAdminTeamName('')
+    setAdminTeamJoinCode('')
+    setAdminTeamBudgetRemaining('')
+    setAdminTeamRosterSpotsTotal('')
+    setAdminTeamRosterSpotsRemaining('')
+    return
+  }
+
+  setAdminTeamName(team.name ?? '')
+  setAdminTeamJoinCode(team.join_code ?? '')
+  setAdminTeamBudgetRemaining(String(team.budget_remaining ?? ''))
+  setAdminTeamRosterSpotsTotal(String(team.roster_spots_total ?? ''))
+  setAdminTeamRosterSpotsRemaining(String(team.roster_spots_remaining ?? ''))
+}, [showAdmin, adminSelectedTeamId, teams])
+
+useEffect(() => {
   if (!settings) return
 
   setAdminNominationSeconds(
@@ -331,6 +422,7 @@ useEffect(() => {
   setQuietEndTime(toHHMM(endMin))
 
   setProxyBiddingEnabled(!!settings.proxy_bidding_enabled)
+  setMinBidReserveEnabled(settings.min_bid_reserve_enabled ?? true)
 }, [settings])
 
   const [teamsCsv, setTeamsCsv] = useState(
@@ -577,7 +669,7 @@ const selectedAuctionHighTeamName = selectedAuction?.high_team_id
 const [teamsRes, playersRes, auctionsRes, stateRes, settingsRes] = await Promise.all([
   supabase
     .from('teams')
-    .select('id,name,budget_remaining,roster_spots_total,roster_spots_remaining')
+    .select('id,name,join_code,budget_remaining,roster_spots_total,roster_spots_remaining')
     .eq('draft_id', DRAFT_ID)
     .order('name'),
 
@@ -602,7 +694,7 @@ const [teamsRes, playersRes, auctionsRes, stateRes, settingsRes] = await Promise
 
   supabase
   .from('draft_settings')
-  .select('draft_id,nomination_hours,bid_hours,nomination_seconds,bid_seconds,quiet_hours_enabled,quiet_start_minute,quiet_end_minute,quiet_timezone,proxy_bidding_enabled')
+  .select('draft_id,nomination_hours,bid_hours,nomination_seconds,bid_seconds,quiet_hours_enabled,quiet_start_minute,quiet_end_minute,quiet_timezone,proxy_bidding_enabled,min_bid_reserve_enabled')
   .eq('draft_id', DRAFT_ID)
   .single(),
 ])
@@ -711,6 +803,7 @@ async function saveDraftSettings() {
   bid_seconds: adminBidSeconds,
 
   proxy_bidding_enabled: proxyBiddingEnabled,
+  min_bid_reserve_enabled: minBidReserveEnabled,
 
   quiet_hours_enabled: quietEnabled,
   quiet_start_minute: (() => {
@@ -740,6 +833,362 @@ await fetch('/api/quiet-hours-tick', {
 
 setError('Saved timer settings.')
 await loadAll()
+}
+
+async function adminResetAuctionBids() {
+  setError('')
+  if (!showAdmin) return setError('Admin only.')
+
+  const auctionId = adminSelectedAuctionId || selectedAuctionId
+  if (!auctionId) return setError('Select an auction to reset.')
+
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) {
+    return setError('Missing admin code. Refresh /admin and enter the code again.')
+  }
+
+  const auction = auctions.find((a) => a.id === auctionId)
+  const playerName = auction
+    ? (players.find((p) => p.id === auction.player_id)?.name ?? 'this player')
+    : 'this player'
+
+  const ok = window.confirm(
+    `Reset all bids for ${playerName}?\n\nThis will remove all proxy bids and reset the auction to 0.`
+  )
+  if (!ok) return
+
+  const res = await fetch('/api/admin/reset-auction-bids', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+      auction_id: auctionId,
+      reason: adminAuctionReason,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Reset auction bids failed.')
+  }
+
+  setError('Auction bids reset.')
+  setSelectedAuctionId(auctionId)
+  await loadAll()
+}
+
+async function adminRemoveTeamBid() {
+  setError('')
+  if (!showAdmin) return setError('Admin only.')
+
+  const auctionId = adminSelectedAuctionId || selectedAuctionId
+  if (!auctionId) return setError('Select an auction first.')
+  if (!adminSelectedBidTeamId) return setError('Select a team bid to remove.')
+
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) {
+    return setError('Missing admin code. Refresh /admin and enter the code again.')
+  }
+
+  const auction = auctions.find((a) => a.id === auctionId)
+  const playerName = auction
+    ? (players.find((p) => p.id === auction.player_id)?.name ?? 'this player')
+    : 'this player'
+
+  const teamName =
+    teams.find((t) => t.id === adminSelectedBidTeamId)?.name ?? 'this team'
+
+  const ok = window.confirm(
+    `Remove ${teamName}'s bid from ${playerName}?\n\nThis will recalculate the auction from the remaining bids.`
+  )
+  if (!ok) return
+
+  const res = await fetch('/api/admin/remove-team-bid', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+      auction_id: auctionId,
+      team_id: adminSelectedBidTeamId,
+      reason: adminAuctionReason,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Remove team bid failed.')
+  }
+
+  setError('Team bid removed.')
+  setSelectedAuctionId(auctionId)
+  setAdminSelectedBidTeamId('')
+  await loadAll()
+}
+
+async function adminSetManualBid() {
+  setError('')
+  if (!showAdmin) return setError('Admin only.')
+
+  const auctionId = adminSelectedAuctionId || selectedAuctionId
+  if (!auctionId) return setError('Select an auction first.')
+  if (!adminManualBidTeamId) return setError('Select a team for the manual bid.')
+
+  const bidAmount = parseInt(adminManualBidAmount, 10)
+  if (!Number.isFinite(bidAmount) || bidAmount <= 0) {
+    return setError('Enter a valid manual bid amount.')
+  }
+
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) {
+    return setError('Missing admin code. Refresh /admin and enter the code again.')
+  }
+
+  const auction = auctions.find((a) => a.id === auctionId)
+  const playerName = auction
+    ? (players.find((p) => p.id === auction.player_id)?.name ?? 'this player')
+    : 'this player'
+
+  const teamName =
+    teams.find((t) => t.id === adminManualBidTeamId)?.name ?? 'this team'
+
+  const ok = window.confirm(
+    `Set ${teamName}'s manual bid to ${bidAmount} for ${playerName}?`
+  )
+  if (!ok) return
+
+  const res = await fetch('/api/admin/set-manual-bid', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+      auction_id: auctionId,
+      team_id: adminManualBidTeamId,
+      bid_amount: bidAmount,
+      reason: adminAuctionReason,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Set manual bid failed.')
+  }
+
+  setError('Manual bid saved.')
+  setSelectedAuctionId(auctionId)
+  await loadAll()
+}
+
+async function adminCancelAuction() {
+  setError('')
+  if (!showAdmin) return setError('Admin only.')
+
+  const auctionId = adminSelectedAuctionId || selectedAuctionId
+  if (!auctionId) return setError('Select an auction first.')
+
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) {
+    return setError('Missing admin code. Refresh /admin and enter the code again.')
+  }
+
+  const auction = auctions.find((a) => a.id === auctionId)
+  const playerName = auction
+    ? (players.find((p) => p.id === auction.player_id)?.name ?? 'this player')
+    : 'this player'
+
+  const ok = window.confirm(
+    `Cancel the auction for ${playerName}?\n\nThis will close the auction, remove all bids, and leave the player undrafted.`
+  )
+  if (!ok) return
+
+  const res = await fetch('/api/admin/cancel-auction', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+      auction_id: auctionId,
+      reason: adminAuctionReason,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Cancel auction failed.')
+  }
+
+  setError('Auction cancelled.')
+  setSelectedAuctionId('')
+  setAdminSelectedAuctionId('')
+  setAdminSelectedBidTeamId('')
+  setAdminManualBidTeamId('')
+  setAdminManualBidAmount('')
+  await loadAll()
+}
+
+async function adminUpdateTeam() {
+  setError('')
+  if (!showAdmin) return setError('Admin only.')
+  if (!adminSelectedTeamId) return setError('Select a team first.')
+
+  const budgetRemaining = parseInt(adminTeamBudgetRemaining, 10)
+  const rosterSpotsTotal = parseInt(adminTeamRosterSpotsTotal, 10)
+  const rosterSpotsRemaining = parseInt(adminTeamRosterSpotsRemaining, 10)
+
+  if (!Number.isFinite(budgetRemaining) || budgetRemaining < 0) {
+    return setError('Enter a valid budget remaining value.')
+  }
+
+  if (!Number.isFinite(rosterSpotsTotal) || rosterSpotsTotal < 0) {
+    return setError('Enter a valid roster spots total value.')
+  }
+
+  if (!Number.isFinite(rosterSpotsRemaining) || rosterSpotsRemaining < 0) {
+    return setError('Enter a valid roster spots remaining value.')
+  }
+
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) {
+    return setError('Missing admin code. Refresh /admin and enter the code again.')
+  }
+
+  const res = await fetch('/api/admin/update-team', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+      team_id: adminSelectedTeamId,
+      name: adminTeamName,
+      join_code: adminTeamJoinCode,
+      budget_remaining: budgetRemaining,
+      roster_spots_total: rosterSpotsTotal,
+      roster_spots_remaining: rosterSpotsRemaining,
+      reason: adminTeamReason,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Update team failed.')
+  }
+
+  setError('Team updated.')
+  await loadAll()
+}
+
+async function adminAddTeam() {
+  setError('')
+  if (!showAdmin) return setError('Admin only.')
+
+  const budgetRemaining = parseInt(adminNewTeamBudgetRemaining, 10)
+  const rosterSpotsTotal = parseInt(adminNewTeamRosterSpotsTotal, 10)
+  const rosterSpotsRemaining = parseInt(adminNewTeamRosterSpotsRemaining, 10)
+
+  if (!Number.isFinite(budgetRemaining) || budgetRemaining < 0) {
+    return setError('Enter a valid new team budget value.')
+  }
+
+  if (!Number.isFinite(rosterSpotsTotal) || rosterSpotsTotal < 0) {
+    return setError('Enter a valid new team roster spots total value.')
+  }
+
+  if (!Number.isFinite(rosterSpotsRemaining) || rosterSpotsRemaining < 0) {
+    return setError('Enter a valid new team roster spots remaining value.')
+  }
+
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) {
+    return setError('Missing admin code. Refresh /admin and enter the code again.')
+  }
+
+  const res = await fetch('/api/admin/add-team', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+      draft_id: DRAFT_ID,
+      name: adminNewTeamName,
+      join_code: adminNewTeamJoinCode,
+      budget_remaining: budgetRemaining,
+      roster_spots_total: rosterSpotsTotal,
+      roster_spots_remaining: rosterSpotsRemaining,
+      reason: adminNewTeamReason,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Add team failed.')
+  }
+
+  setError('Team added.')
+  setAdminNewTeamName('')
+  setAdminNewTeamJoinCode('')
+  setAdminNewTeamBudgetRemaining('200')
+  setAdminNewTeamRosterSpotsTotal('23')
+  setAdminNewTeamRosterSpotsRemaining('23')
+  setAdminNewTeamReason('')
+  await loadAll()
+}
+
+async function adminSetAuctionTimer() {
+  setError('')
+  if (!showAdmin) return setError('Admin only.')
+
+  const auctionId = adminSelectedAuctionId || selectedAuctionId
+  if (!auctionId) return setError('Select an auction first.')
+
+  const minutesRemaining = parseInt(adminTimerMinutes, 10)
+  if (!Number.isFinite(minutesRemaining) || minutesRemaining < 0) {
+    return setError('Enter a valid timer value in minutes.')
+  }
+
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) {
+    return setError('Missing admin code. Refresh /admin and enter the code again.')
+  }
+
+  const auction = auctions.find((a) => a.id === auctionId)
+  const playerName = auction
+    ? (players.find((p) => p.id === auction.player_id)?.name ?? 'this player')
+    : 'this player'
+
+  const ok = window.confirm(
+    `Set ${playerName}'s auction timer to ${minutesRemaining} minutes remaining?`
+  )
+  if (!ok) return
+
+  const res = await fetch('/api/admin/set-auction-timer', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+      auction_id: auctionId,
+      minutes_remaining: minutesRemaining,
+      reason: adminAuctionReason,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Set auction timer failed.')
+  }
+
+  setError('Auction timer updated.')
+  setSelectedAuctionId(auctionId)
+  await loadAll()
 }
 
 async function forceFinalizeNow(auctionId: string) {
@@ -857,11 +1306,12 @@ function teamAvailableBudgetForBid(team: Team, auction: Auction) {
     .filter((a) => a.id !== auction.id)
     .length
 
-  const minReserve = Math.max(
-    0,
-    Number(team.roster_spots_remaining ?? 0) - winningOtherCount - 1
-  )
-
+  const minReserve = minBidReserveEnabled
+  ? Math.max(
+      0,
+      Number(team.roster_spots_remaining ?? 0) - winningOtherCount - 1
+    )
+  : 0
   return Math.max(
     0,
     Number(team.budget_remaining ?? 0) - committedOther - minReserve
@@ -1644,7 +2094,7 @@ style={{ minWidth: 120 }}
   <th style={{ borderBottom: '1px solid #ddd' }}>Ratings</th>
   <th style={{ borderBottom: '1px solid #ddd' }}>High Bid</th>
   <th style={{ borderBottom: '1px solid #ddd' }}>High Team</th>
-  <th style={{ borderBottom: '1px solid #ddd' }}>Ends</th>
+  <th style={{ borderBottom: '1px solid #ddd' }}>Time Left</th>
   {showAdmin && (
     <th style={{ borderBottom: '1px solid #ddd' }}>Actions</th>
   )}
@@ -1676,7 +2126,7 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
 }}
               >
                 <td className="td-strong">{p?.name ?? '(missing player)'}</td>
-<td style={{ fontSize: 12 }}>{ratingsSummary}</td>
+<td style={{ fontSize: 12, minWidth: 340 }}>{ratingsSummary}</td>
 <td className="td-right td-strong">{a.high_bid}</td>
 <td className="td-strong">{highTeamName}</td>
 
@@ -1691,12 +2141,6 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
     <span className="badge badge-live">
       {formatRemaining(new Date(a.ends_at).getTime() - nowTick)}
     </span>
-  )}
-
-  {!paused && (
-    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-      {new Date(a.ends_at).toLocaleString()}
-    </div>
   )}
 </td>
 
@@ -1782,7 +2226,7 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
               </div>
 
               <div className="mobile-card-row">
-  <span className="mobile-card-label">Ends</span>
+  <span className="mobile-card-label">Time Left</span>
   <span className="mobile-card-value">
     {a.paused
       ? `Paused • ${formatRemaining((Number(a.paused_remaining_seconds ?? 0)) * 1000)}`
@@ -1791,12 +2235,6 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
         : formatRemaining(new Date(a.ends_at).getTime() - nowTick)}
   </span>
 </div>
-
-{!a.paused && (
-  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-    {new Date(a.ends_at).toLocaleString()}
-  </div>
-)}
 
               {showAdmin && (
                 <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
@@ -1894,12 +2332,11 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
               <thead>
                 <tr>
   <th style={{ borderBottom: '1px solid #ddd' }}>Player</th>
-  <th style={{ borderBottom: '1px solid #ddd' }}>Pos</th>
-  <th style={{ borderBottom: '1px solid #ddd' }}>Your Max</th>
-  <th style={{ borderBottom: '1px solid #ddd' }}>Current High</th>
-  <th style={{ borderBottom: '1px solid #ddd' }}>Needed to Lead</th>
-  <th style={{ borderBottom: '1px solid #ddd' }}>Status</th>
-  <th style={{ borderBottom: '1px solid #ddd' }}>Ends</th>
+  <th style={{ borderBottom: '1px solid #ddd' }}>Ratings</th>
+  <th style={{ borderBottom: '1px solid #ddd', whiteSpace: 'nowrap' }}>Your Max</th>
+<th style={{ borderBottom: '1px solid #ddd', whiteSpace: 'nowrap' }}>Current High</th>
+<th style={{ borderBottom: '1px solid #ddd', whiteSpace: 'nowrap' }}>Status</th>
+<th style={{ borderBottom: '1px solid #ddd', whiteSpace: 'nowrap' }}>Time Left</th>
 </tr>
               </thead>
               <tbody>
@@ -1909,24 +2346,49 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
   onClick={() =>
     selectAuctionAndPrefillBid(
       row.auction_id,
-      row.needed_to_lead ?? row.my_max_bid + 1
+      getSuggestedBidForAuction(row.auction_id)
     )
   }
   style={{ cursor: 'pointer' }}
 >
   <td className="td-strong">{row.player_name}</td>
-  <td>{row.pos || '—'}</td>
-  <td className="td-strong">{row.my_max_bid}</td>
-  <td>{row.current_high_bid}</td>
-  <td>{row.needed_to_lead ?? '—'}</td>
-  <td>
+  <td style={{ fontSize: 12, minWidth: 340 }}>
+  {row.ratings_summary || '—'}
+</td>
+  <td className="td-strong" style={{ whiteSpace: 'nowrap' }}>{row.my_max_bid}</td>
+<td style={{ whiteSpace: 'nowrap' }}>{row.current_high_bid}</td>
+<td style={{ whiteSpace: 'nowrap' }}>
     {row.status === 'WINNING' ? (
       <span className="badge badge-live">Winning</span>
     ) : (
       <span className="badge badge-ended">Outbid</span>
     )}
   </td>
-  <td>{new Date(row.ends_at).toLocaleString()}</td>
+  <td>
+  {(() => {
+    const auction = auctions.find((a) => a.id === row.auction_id)
+    const paused = !!auction?.paused
+    const ended = !paused && new Date(row.ends_at).getTime() <= nowTick
+
+    if (paused) {
+      return (
+        <span className="badge badge-ended">
+          Paused • {formatRemaining((Number(auction?.paused_remaining_seconds ?? 0)) * 1000)}
+        </span>
+      )
+    }
+
+    if (ended) {
+      return <span className="badge badge-ended">Ended</span>
+    }
+
+    return (
+      <span className="badge badge-live">
+        {formatRemaining(new Date(row.ends_at).getTime() - nowTick)}
+      </span>
+    )
+  })()}
+</td>
 </tr>
                 ))}
               </tbody>
@@ -2061,6 +2523,150 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
   <summary>Admin Tools</summary>
   <div style={{ marginTop: 12 }}>
     <section style={{ marginTop: 16 }}>
+      <section style={{ marginTop: 16 }}>
+  <h2 className="section-title">Admin: Auction Manager</h2>
+  <p className="help">
+    Reset an active auction back to no bids. This removes all proxy bids and resets the timer.
+  </p>
+
+  <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr' }}>
+    <label>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Active auction
+      </div>
+      <select
+        value={adminSelectedAuctionId}
+        onChange={(e) => setAdminSelectedAuctionId(e.target.value)}
+        style={{ width: '100%' }}
+      >
+        <option value="">Select an active auction</option>
+        {auctions
+          .filter((a) => !a.closed_at)
+          .map((a) => {
+            const playerName =
+              players.find((p) => p.id === a.player_id)?.name ?? 'Unknown Player'
+
+            return (
+              <option key={a.id} value={a.id}>
+                {playerName} — High Bid: {a.high_bid ?? 0}
+              </option>
+            )
+          })}
+      </select>
+    </label>
+
+    <label>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        <label>
+  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+    Team bid to remove
+  </div>
+  <select
+    value={adminSelectedBidTeamId}
+    onChange={(e) => setAdminSelectedBidTeamId(e.target.value)}
+    style={{ width: '100%' }}
+  >
+    <option value="">Select a team bid</option>
+    {adminAuctionBidRows.map((row) => (
+      <option key={row.team_id} value={row.team_id}>
+        {row.team_name} — Max Bid: {row.max_bid}
+      </option>
+    ))}
+  </select>
+  
+</label>
+<label>
+  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+    Team for manual bid
+  </div>
+  <select
+    value={adminManualBidTeamId}
+    onChange={(e) => setAdminManualBidTeamId(e.target.value)}
+    style={{ width: '100%' }}
+  >
+    <option value="">Select a team</option>
+    {teams.map((t) => (
+      <option key={t.id} value={t.id}>
+        {t.name}
+      </option>
+    ))}
+  </select>
+</label>
+
+<label>
+  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+    Manual bid amount
+  </div>
+  <input
+    type="number"
+    min={1}
+    value={adminManualBidAmount}
+    onChange={(e) => setAdminManualBidAmount(e.target.value)}
+    placeholder="Enter bid amount"
+    style={{ width: '100%' }}
+  />
+</label>
+<label>
+  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+    Set timer (minutes remaining)
+  </div>
+  <input
+    type="number"
+    min={0}
+    value={adminTimerMinutes}
+    onChange={(e) => setAdminTimerMinutes(e.target.value)}
+    placeholder="Enter minutes remaining"
+    style={{ width: '100%' }}
+  />
+</label>
+        Reason (optional)
+      </div>
+      <input
+        type="text"
+        value={adminAuctionReason}
+        onChange={(e) => setAdminAuctionReason(e.target.value)}
+        placeholder="Example: Removed mistaken bids after commissioner correction"
+        style={{ width: '100%' }}
+      />
+    </label>
+  </div>
+
+  <div className="btn-row" style={{ marginTop: 12 }}>
+    <button className="btn btn-danger" onClick={adminResetAuctionBids}>
+      Reset Auction Bids
+    </button>
+    <button
+  className="btn"
+  onClick={adminRemoveTeamBid}
+  disabled={!adminSelectedAuctionId || !adminSelectedBidTeamId}
+>
+  Remove Selected Team Bid
+</button>
+<button
+  className="btn"
+  onClick={adminSetManualBid}
+  disabled={!adminSelectedAuctionId || !adminManualBidTeamId || !adminManualBidAmount}
+>
+  Set/Add Manual Bid
+</button>
+<button
+  className="btn"
+  onClick={adminSetAuctionTimer}
+  disabled={!adminSelectedAuctionId || adminTimerMinutes === ''}
+>
+  Set Auction Timer
+</button>
+<button
+  className="btn btn-danger"
+  onClick={adminCancelAuction}
+  disabled={!adminSelectedAuctionId}
+>
+  Cancel Auction
+</button>
+  </div>
+</section>
+
+<hr style={{ margin: '16px 0' }} />
   <h2 className="section-title">Admin: Draft Timer Settings</h2>
   <p className="help">
     These settings apply to all users. Nomination sets the starting time for new auctions.
@@ -2141,6 +2747,14 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
     <span>sec</span>
   </div>
 </label>
+<label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+  <input
+    type="checkbox"
+    checked={minBidReserveEnabled}
+    onChange={(e) => setMinBidReserveEnabled(e.target.checked)}
+  />
+  <span>Require $1 reserved per open roster spot</span>
+</label>
      </div>
 
   <hr style={{ margin: '16px 0' }} />
@@ -2209,6 +2823,207 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
   </div>
 </section>
       <section className="card">
+        <section style={{ marginTop: 24 }}>
+  <h2 className="section-title">Admin: Team Manager</h2>
+  <p className="help">
+    Edit a team’s name, join code, budget remaining, and roster spot totals.
+  </p>
+
+  <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
+    <label>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Team
+      </div>
+      <select
+        value={adminSelectedTeamId}
+        onChange={(e) => setAdminSelectedTeamId(e.target.value)}
+        style={{ width: '100%' }}
+      >
+        <option value="">Select a team</option>
+        {teams.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
+          </option>
+        ))}
+      </select>
+    </label>
+
+    <label>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Team name
+      </div>
+      <input
+        type="text"
+        value={adminTeamName}
+        onChange={(e) => setAdminTeamName(e.target.value)}
+        style={{ width: '100%' }}
+      />
+    </label>
+
+    <label>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Join code
+      </div>
+      <input
+        type="text"
+        value={adminTeamJoinCode}
+        onChange={(e) => setAdminTeamJoinCode(e.target.value)}
+        style={{ width: '100%' }}
+      />
+    </label>
+
+    <label>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Budget remaining
+      </div>
+      <input
+        type="number"
+        min={0}
+        value={adminTeamBudgetRemaining}
+        onChange={(e) => setAdminTeamBudgetRemaining(e.target.value)}
+        style={{ width: '100%' }}
+      />
+    </label>
+
+    <label>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Roster spots total
+      </div>
+      <input
+        type="number"
+        min={0}
+        value={adminTeamRosterSpotsTotal}
+        onChange={(e) => setAdminTeamRosterSpotsTotal(e.target.value)}
+        style={{ width: '100%' }}
+      />
+    </label>
+
+    <label>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Roster spots remaining
+      </div>
+      <input
+        type="number"
+        min={0}
+        value={adminTeamRosterSpotsRemaining}
+        onChange={(e) => setAdminTeamRosterSpotsRemaining(e.target.value)}
+        style={{ width: '100%' }}
+      />
+    </label>
+
+    <label style={{ gridColumn: '1 / -1' }}>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Reason (optional)
+      </div>
+      <input
+        type="text"
+        value={adminTeamReason}
+        onChange={(e) => setAdminTeamReason(e.target.value)}
+        placeholder="Example: Corrected budget after commissioner adjustment"
+        style={{ width: '100%' }}
+      />
+    </label>
+  </div>
+
+  <div className="btn-row" style={{ marginTop: 12 }}>
+    <button
+      className="btn"
+      onClick={adminUpdateTeam}
+      disabled={!adminSelectedTeamId}
+    >
+      Save Team Changes
+    </button>
+    <hr style={{ margin: '16px 0' }} />
+
+<h3 style={{ margin: '8px 0 12px 0' }}>Add New Team</h3>
+
+<div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
+  <label>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Team name
+    </div>
+    <input
+      type="text"
+      value={adminNewTeamName}
+      onChange={(e) => setAdminNewTeamName(e.target.value)}
+      style={{ width: '100%' }}
+    />
+  </label>
+
+  <label>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Join code
+    </div>
+    <input
+      type="text"
+      value={adminNewTeamJoinCode}
+      onChange={(e) => setAdminNewTeamJoinCode(e.target.value)}
+      style={{ width: '100%' }}
+    />
+  </label>
+
+  <label>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Budget remaining
+    </div>
+    <input
+      type="number"
+      min={0}
+      value={adminNewTeamBudgetRemaining}
+      onChange={(e) => setAdminNewTeamBudgetRemaining(e.target.value)}
+      style={{ width: '100%' }}
+    />
+  </label>
+
+  <label>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Roster spots total
+    </div>
+    <input
+      type="number"
+      min={0}
+      value={adminNewTeamRosterSpotsTotal}
+      onChange={(e) => setAdminNewTeamRosterSpotsTotal(e.target.value)}
+      style={{ width: '100%' }}
+    />
+  </label>
+
+  <label>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Roster spots remaining
+    </div>
+    <input
+      type="number"
+      min={0}
+      value={adminNewTeamRosterSpotsRemaining}
+      onChange={(e) => setAdminNewTeamRosterSpotsRemaining(e.target.value)}
+      style={{ width: '100%' }}
+    />
+  </label>
+
+  <label style={{ gridColumn: '1 / -1' }}>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Reason (optional)
+    </div>
+    <input
+      type="text"
+      value={adminNewTeamReason}
+      onChange={(e) => setAdminNewTeamReason(e.target.value)}
+      placeholder="Example: Added replacement owner team"
+      style={{ width: '100%' }}
+    />
+  </label>
+</div>
+
+<div className="btn-row" style={{ marginTop: 12 }}>
+  <button className="btn" onClick={adminAddTeam}>
+    Add Team
+  </button>
+</div>
+  </div>
+</section>
+
+<hr style={{ margin: '16px 0' }} />
   <h2>Admin: Import Teams</h2>
 <p className="help">
   Paste a team list with 2 or 3 columns. Headers are optional.
