@@ -71,6 +71,10 @@ const SECONDARY_POSITIONS = new Set([
   // If you ever want pitchers to have secondary roles too, add them here later.
 ])
 
+const POSITION_TRACKER_ORDER = [
+  'C', '1B', '2B', 'SS', '3B', 'LF', 'CF', 'RF', 'SP', 'RP', 'SP/RP', 'CP',
+] as const
+
 function normPos(s: unknown) {
   return String(s ?? '').trim().toUpperCase()
 }
@@ -135,6 +139,15 @@ function getRatingsSummary(p: Player | null) {
 export default function DraftApp({ showAdmin }: { showAdmin: boolean }) {
   const [teams, setTeams] = useState<Team[]>([])
   const [players, setPlayers] = useState<Player[]>([])
+  const [myNominationQueue, setMyNominationQueue] = useState<
+  {
+    id: string
+    player_id: string
+    queue_position: number
+    player_name: string
+    pos: string | null
+  }[]
+>([])
   const [auctions, setAuctions] = useState<Auction[]>([])
   const [selectedAuctionId, setSelectedAuctionId] = useState('')
 
@@ -303,7 +316,18 @@ const [adminNewTeamBudgetRemaining, setAdminNewTeamBudgetRemaining] = useState<s
 const [adminNewTeamRosterSpotsTotal, setAdminNewTeamRosterSpotsTotal] = useState<string>('23')
 const [adminNewTeamRosterSpotsRemaining, setAdminNewTeamRosterSpotsRemaining] = useState<string>('23')
 const [adminNewTeamReason, setAdminNewTeamReason] = useState('')
+const [autoNominationEnabled, setAutoNominationEnabled] = useState(false)
+const [autoNominationFrequencySeconds, setAutoNominationFrequencySeconds] = useState<string>('300')
+const [autoNominationMaxActiveAuctions, setAutoNominationMaxActiveAuctions] = useState<string>('17')
+const [nominationOrderRows, setNominationOrderRows] = useState<
+  Array<{
+    team_id: string
+    team_name: string
+    sort_order: number
+  }>
+>([])
 const [adminTimerMinutes, setAdminTimerMinutes] = useState<string>('360')
+const [lastAutoNominationClientTick, setLastAutoNominationClientTick] = useState<number>(0)
 
   useEffect(() => {
   const t = setInterval(() => setNowTick(Date.now()), 1000)
@@ -531,6 +555,35 @@ const myDraftedPlayers = useMemo(() => {
       }
     })
 }, [players, lockedTeamId, showAdmin])
+const myPositionTracker = useMemo(() => {
+  const emptyCounts = Object.fromEntries(
+    POSITION_TRACKER_ORDER.map((pos) => [pos, 0])
+  ) as Record<(typeof POSITION_TRACKER_ORDER)[number], number>
+
+  if (!lockedTeamId || showAdmin) return emptyCounts
+
+  const addPrimaryPosition = (player: Player | undefined | null) => {
+    const primary = String(player?.metadata?.position_primary ?? '').toUpperCase()
+    if (primary && primary in emptyCounts) {
+      emptyCounts[primary as keyof typeof emptyCounts] += 1
+    }
+  }
+
+  // Count drafted players
+  players
+    .filter((p) => p.drafted_by_team_id === lockedTeamId)
+    .forEach((p) => addPrimaryPosition(p))
+
+  // Count open auctions currently being won
+  auctions
+    .filter((a) => !a.closed_at && a.high_team_id === lockedTeamId)
+    .forEach((a) => {
+      const player = players.find((p) => p.id === a.player_id)
+      addPrimaryPosition(player)
+    })
+
+  return emptyCounts
+}, [players, auctions, lockedTeamId, showAdmin])
 const draftedExportRows = useMemo(() => {
   const teamNameById = new Map(teams.map(t => [t.id, t.name]))
 
@@ -710,7 +763,63 @@ const [teamsRes, playersRes, auctionsRes, stateRes, settingsRes] = await Promise
     setAuctions(auctionsRes.data ?? [])
     setState(stateRes.data ?? null)
     setSettings(settingsRes.data ?? null)
+        if (showAdmin) {
+      const [autoNomRes, orderRes] = await Promise.all([
+        supabase
+          .from('draft_auto_nomination_state')
+          .select('draft_id,is_enabled,frequency_seconds,max_active_auctions,current_order_position,last_tick_at,updated_at')
+          .eq('draft_id', DRAFT_ID)
+          .maybeSingle(),
+
+        supabase
+          .from('nomination_order')
+          .select('draft_id,team_id,sort_order')
+          .eq('draft_id', DRAFT_ID)
+          .order('sort_order', { ascending: true }),
+      ])
+
+      if (!autoNomRes.error && autoNomRes.data) {
+        setAutoNominationEnabled(!!autoNomRes.data.is_enabled)
+        setAutoNominationFrequencySeconds(String(autoNomRes.data.frequency_seconds ?? 300))
+        setAutoNominationMaxActiveAuctions(String(autoNomRes.data.max_active_auctions ?? 17))
+      }
+
+      if (!orderRes.error && orderRes.data) {
+        const rows = orderRes.data.map((row) => ({
+          team_id: String(row.team_id),
+          team_name: teamsRes.data?.find((t: any) => t.id === row.team_id)?.name ?? 'Unknown Team',
+          sort_order: Number(row.sort_order ?? 0),
+        }))
+
+        setNominationOrderRows(rows)
+      }
+    }
     
+    // My nomination queue
+if (lockedTeamId && !showAdmin) {
+  const qRes = await supabase
+    .from('nomination_queue')
+    .select('id, player_id, queue_position')
+    .eq('draft_id', DRAFT_ID)
+    .eq('team_id', lockedTeamId)
+    .order('queue_position', { ascending: true })
+
+  if (!qRes.error && qRes.data) {
+    const rows = qRes.data.map((row) => {
+  const player = playersRes.data?.find((p: any) => p.id === row.player_id)
+
+  return {
+    id: row.id,
+    player_id: row.player_id,
+    queue_position: row.queue_position,
+    player_name: player?.name ?? 'Unknown Player',
+    pos: player?.metadata?.position_primary ?? null,
+  }
+})
+
+    setMyNominationQueue(rows)
+  }
+}
   }
 
 async function importTeamsFromCsv() {
@@ -1191,6 +1300,222 @@ async function adminSetAuctionTimer() {
   await loadAll()
 }
 
+async function addSelectedPlayerToQueue(playerId: string) {
+  setError('')
+  if (showAdmin) return setError('Queue actions are for team accounts only.')
+  if (!DRAFT_ID) return setError('Missing DRAFT_ID.')
+
+  const teamCode = localStorage.getItem('locked_team_code') ?? ''
+  if (!lockedTeamId || !teamCode) {
+    return setError('Join your team first.')
+  }
+
+  const res = await fetch('/api/queue/add', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      draft_id: DRAFT_ID,
+      team_code: teamCode,
+      player_id: playerId,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Add to queue failed.')
+  }
+
+  setError('Player added to queue.')
+  await loadAll()
+}
+
+async function removeQueueItem(queueId: string) {
+  setError('')
+  if (showAdmin) return setError('Queue actions are for team accounts only.')
+  if (!DRAFT_ID) return setError('Missing DRAFT_ID.')
+
+  const teamCode = localStorage.getItem('locked_team_code') ?? ''
+  if (!lockedTeamId || !teamCode) {
+    return setError('Join your team first.')
+  }
+
+  const res = await fetch('/api/queue/remove', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      draft_id: DRAFT_ID,
+      team_code: teamCode,
+      queue_id: queueId,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Remove from queue failed.')
+  }
+
+  setError('Player removed from queue.')
+  await loadAll()
+}
+
+async function moveQueueItem(queueId: string, direction: 'up' | 'down') {
+  setError('')
+  if (showAdmin) return setError('Queue actions are for team accounts only.')
+  if (!DRAFT_ID) return setError('Missing DRAFT_ID.')
+
+  const teamCode = localStorage.getItem('locked_team_code') ?? ''
+  if (!lockedTeamId || !teamCode) {
+    return setError('Join your team first.')
+  }
+
+  const res = await fetch('/api/queue/move', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      draft_id: DRAFT_ID,
+      team_code: teamCode,
+      queue_id: queueId,
+      direction,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Move queue item failed.')
+  }
+
+  if (data?.status === 'NO_MOVE') {
+    return
+  }
+
+  setError('')
+  await loadAll()
+}
+
+async function saveAutoNominationSettings() {
+  setError('')
+  if (!showAdmin) return setError('Admin only.')
+  if (!DRAFT_ID) return setError('Missing DRAFT_ID.')
+
+  const frequencySeconds = parseInt(autoNominationFrequencySeconds, 10)
+  const maxActiveAuctions = parseInt(autoNominationMaxActiveAuctions, 10)
+
+  if (!Number.isFinite(frequencySeconds) || frequencySeconds < 1) {
+    return setError('Enter a valid auto nomination frequency in seconds.')
+  }
+
+  if (!Number.isFinite(maxActiveAuctions) || maxActiveAuctions < 1) {
+    return setError('Enter a valid maximum active auctions value.')
+  }
+
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) {
+    return setError('Missing admin code. Refresh /admin and enter the code again.')
+  }
+
+  const res = await fetch('/api/admin/save-auto-nomination-settings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+      draft_id: DRAFT_ID,
+      is_enabled: autoNominationEnabled,
+      frequency_seconds: frequencySeconds,
+      max_active_auctions: maxActiveAuctions,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Save auto nomination settings failed.')
+  }
+
+  setError('Auto nomination settings saved.')
+  await loadAll()
+}
+
+async function moveNominationOrderTeam(teamId: string, direction: 'up' | 'down') {
+  setError('')
+  if (!showAdmin) return setError('Admin only.')
+  if (!DRAFT_ID) return setError('Missing DRAFT_ID.')
+
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) {
+    return setError('Missing admin code. Refresh /admin and enter the code again.')
+  }
+
+  const res = await fetch('/api/admin/move-nomination-order', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+      draft_id: DRAFT_ID,
+      team_id: teamId,
+      direction,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Move nomination order failed.')
+  }
+
+  await loadAll()
+}
+
+async function runAutoNominationTickNow() {
+  setError('')
+  if (!showAdmin) return setError('Admin only.')
+  if (!DRAFT_ID) return setError('Missing DRAFT_ID.')
+
+  const adminCode = localStorage.getItem('admin_code') ?? ''
+  if (!adminCode) {
+    return setError('Missing admin code. Refresh /admin and enter the code again.')
+  }
+
+  const res = await fetch('/api/admin/auto-nomination-tick', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-code': adminCode,
+    },
+    body: JSON.stringify({
+      draft_id: DRAFT_ID,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return setError(data?.error ?? 'Auto nomination tick failed.')
+  }
+
+  const status = String(data?.status ?? 'UNKNOWN')
+
+  if (status === 'NOMINATED') {
+    setError('Auto nomination created one auction.')
+  } else if (status === 'NO_QUEUED_PLAYERS') {
+    setError('No queued players available to nominate.')
+  } else if (status === 'MAX_ACTIVE_AUCTIONS_REACHED') {
+    setError('Maximum active auctions reached.')
+  } else if (status === 'AUTO_NOMINATION_DISABLED') {
+    setError('Auto nominations are disabled.')
+  } else {
+    setError(`Auto nomination tick: ${status}`)
+  }
+
+  await loadAll()
+}
+
 async function forceFinalizeNow(auctionId: string) {
   if (!showAdmin) return setError('Admin only.')
 
@@ -1467,12 +1792,71 @@ async function replacePlayersFromCsv() {
   if (showAdmin) autoFinalizeExpiredAuctionsFromServer()
 }, 5000)
 
-   return () => {
+      return () => {
   clearInterval(finalizeTimer)
   supabase.removeChannel(channel)
 }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [lockedTeamId])
+  useEffect(() => {
+  if (!showAdmin) return
+  if (!DRAFT_ID) return
+  if (!autoNominationEnabled) return
+
+  const frequencyMs = Math.max(
+    1000,
+    parseInt(autoNominationFrequencySeconds || '300', 10) * 1000
+  )
+
+  const interval = setInterval(async () => {
+    const now = Date.now()
+
+    if (now - lastAutoNominationClientTick < frequencyMs - 250) {
+      return
+    }
+
+    const adminCode = localStorage.getItem('admin_code') ?? ''
+    if (!adminCode) return
+
+    try {
+      const res = await fetch('/api/admin/auto-nomination-tick', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-code': adminCode,
+        },
+        body: JSON.stringify({
+          draft_id: DRAFT_ID,
+        }),
+      })
+
+      const data = await res.json().catch(() => ({}))
+
+      if (res.ok) {
+        const status = String(data?.status ?? 'UNKNOWN')
+
+        if (
+          status === 'NOMINATED' ||
+          status === 'NO_QUEUED_PLAYERS' ||
+          status === 'MAX_ACTIVE_AUCTIONS_REACHED'
+        ) {
+          setLastAutoNominationClientTick(now)
+          await loadAll()
+        }
+      }
+    } catch {
+      // swallow interval errors; admin can still use manual tick
+    }
+  }, 1000)
+
+  return () => clearInterval(interval)
+}, [
+  showAdmin,
+  DRAFT_ID,
+  autoNominationEnabled,
+  autoNominationFrequencySeconds,
+  lastAutoNominationClientTick,
+])
 
   async function nominate() {
   setError('')
@@ -1901,6 +2285,8 @@ return (
         <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('trait2')}>Trait 2</th>
         <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('hand')}>Hand</th>
         <th style={{ cursor: 'pointer' }} onClick={() => togglePlayerSort('age')}>Age</th>
+        <th>Select</th>
+        <th>Queue</th>
       </tr>
     </thead>
     <tbody>
@@ -1915,6 +2301,7 @@ return (
           <tr
             key={p.id}
             onClick={() => setSelectedPlayerId(p.id)}
+onMouseDown={() => setSelectedPlayerId(p.id)}
             style={{
               cursor: 'pointer',
               background:
@@ -1938,6 +2325,31 @@ return (
             <td>{p.metadata?.trait_2 ?? '—'}</td>
             <td>{hand || '—'}</td>
             <td>{p.metadata?.age ?? '—'}</td>
+            <td>
+  <button
+    type="button"
+    className="btn"
+    onClick={(e) => {
+      e.stopPropagation()
+      setSelectedPlayerId(p.id)
+    }}
+  >
+    {p.id === selectedPlayerId ? 'Selected' : 'Select'}
+  </button>
+</td>
+<td>
+  <button
+    type="button"
+    className="btn"
+    onClick={(e) => {
+      e.stopPropagation()
+      addSelectedPlayerToQueue(p.id)
+    }}
+    disabled={showAdmin || !lockedTeamId}
+  >
+    Add to Queue
+  </button>
+</td>
           </tr>
         )
       })}
@@ -2275,6 +2687,32 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
     <div className="help" style={{ marginBottom: 12 }}>
   Team: <b>{teams.find((t) => t.id === lockedTeamId)?.name ?? 'Unknown'}</b>
 </div>
+<div
+  className="card"
+  style={{
+    padding: 12,
+    marginBottom: 16,
+  }}
+>
+  <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+    Position Tracker (drafted + winning auctions)
+  </div>
+  <div
+    style={{
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '8px 14px',
+      fontSize: 14,
+      lineHeight: 1.5,
+    }}
+  >
+    {POSITION_TRACKER_ORDER.map((pos) => (
+      <span key={pos} style={{ whiteSpace: 'nowrap' }}>
+        <b>{pos}:</b> {myPositionTracker[pos]}
+      </span>
+    ))}
+  </div>
+</div>
     <div
   style={{
     display: 'grid',
@@ -2397,6 +2835,65 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
         )}
       </>
     )}
+
+<h3 style={{ margin: '0 0 10px' }}>Your Nomination Queue</h3>
+
+{myNominationQueue.length === 0 ? (
+  <p className="muted" style={{ marginBottom: 16 }}>
+    No players in your queue.
+  </p>
+) : (
+  <div className="table-scroll" style={{ marginBottom: 20 }}>
+    <table className="table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Player</th>
+          <th>Pos</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {myNominationQueue.map((row) => (
+          <tr key={row.id}>
+            <td>{row.queue_position}</td>
+            <td className="td-strong">{row.player_name}</td>
+            <td>{row.pos || '—'}</td>
+            <td>
+  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+    <button
+      type="button"
+      className="btn"
+      onClick={() => moveQueueItem(row.id, 'up')}
+      disabled={row.queue_position === 1}
+    >
+      ↑
+    </button>
+
+    <button
+      type="button"
+      className="btn"
+      onClick={() => moveQueueItem(row.id, 'down')}
+      disabled={row.queue_position === myNominationQueue.length}
+    >
+      ↓
+    </button>
+
+    <button
+      type="button"
+      className="btn btn-danger"
+      onClick={() => removeQueueItem(row.id)}
+    >
+      Remove
+    </button>
+  </div>
+</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+)}
 
     <h3 style={{ margin: '0 0 10px' }}>Your Drafted Players</h3>
 
@@ -2824,6 +3321,116 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
 </section>
       <section className="card">
         <section style={{ marginTop: 24 }}>
+  <hr style={{ margin: '16px 0' }} />
+
+<section style={{ marginTop: 24 }}>
+  <h2 className="section-title">Admin: Auto Nomination Queue</h2>
+  <p className="help">
+    Control automatic queue-based nominations and view the current nomination order.
+  </p>
+  {autoNominationEnabled && (
+  <p className="help" style={{ marginTop: 8 }}>
+    Auto nomination is active while this admin page remains open.
+  </p>
+)}
+
+  <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
+    <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <input
+        type="checkbox"
+        checked={autoNominationEnabled}
+        onChange={(e) => setAutoNominationEnabled(e.target.checked)}
+      />
+      <span>Enable auto nominations</span>
+    </label>
+
+    <div />
+
+    <label>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Frequency (seconds)
+      </div>
+      <input
+        type="number"
+        min={1}
+        value={autoNominationFrequencySeconds}
+        onChange={(e) => setAutoNominationFrequencySeconds(e.target.value)}
+        style={{ width: '100%' }}
+      />
+    </label>
+
+    <label>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+        Max active auctions
+      </div>
+      <input
+        type="number"
+        min={1}
+        value={autoNominationMaxActiveAuctions}
+        onChange={(e) => setAutoNominationMaxActiveAuctions(e.target.value)}
+        style={{ width: '100%' }}
+      />
+    </label>
+  </div>
+
+  <div className="btn-row" style={{ marginTop: 12 }}>
+    <button className="btn" onClick={saveAutoNominationSettings}>
+      Save Auto Nomination Settings
+    </button>
+    <button className="btn" onClick={runAutoNominationTickNow}>
+      Run Queue Tick Now
+    </button>
+  </div>
+
+  <div style={{ marginTop: 18 }}>
+    <h3 style={{ margin: '0 0 10px' }}>Current Nomination Order</h3>
+
+    {nominationOrderRows.length === 0 ? (
+      <p className="muted">No nomination order found.</p>
+    ) : (
+      <div className="table-scroll">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Team</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nominationOrderRows.map((row) => (
+              <tr key={row.team_id}>
+                <td>{row.sort_order}</td>
+                <td className="td-strong">{row.team_name}</td>
+                <td>
+  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+    <button
+      type="button"
+      className="btn"
+      onClick={() => moveNominationOrderTeam(row.team_id, 'up')}
+      disabled={row.sort_order === 1}
+    >
+      ↑
+    </button>
+
+    <button
+      type="button"
+      className="btn"
+      onClick={() => moveNominationOrderTeam(row.team_id, 'down')}
+      disabled={row.sort_order === nominationOrderRows.length}
+    >
+      ↓
+    </button>
+  </div>
+</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+</section>        
   <h2 className="section-title">Admin: Team Manager</h2>
   <p className="help">
     Edit a team’s name, join code, budget remaining, and roster spot totals.
