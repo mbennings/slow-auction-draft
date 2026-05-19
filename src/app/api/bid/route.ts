@@ -59,6 +59,8 @@ export async function POST(req: Request) {
       INVALID_BID_AMOUNT: 'Invalid bid_amount.',
       INVALID_TEAM_CODE: 'Invalid team code.',
       NO_ROSTER_SPOTS: 'No roster spots remaining.',
+      NO_HITTER_SPOTS: 'No hitter roster spots remaining.',
+      NO_PITCHER_SPOTS: 'No pitcher roster spots remaining.',
       AUCTION_NOT_FOUND: 'Auction not found.',
       AUCTION_WRONG_DRAFT: 'Auction does not belong to this draft.',
       AUCTION_CLOSED: 'Auction already closed.',
@@ -78,6 +80,8 @@ export async function POST(req: Request) {
       BID_TOO_LOW: 400,
       BID_EXCEEDS_AVAILABLE: 400,
       NO_ROSTER_SPOTS: 400,
+      NO_HITTER_SPOTS: 400,
+      NO_PITCHER_SPOTS: 400,
       PROXY_MUST_INCREASE: 400,
     }
 

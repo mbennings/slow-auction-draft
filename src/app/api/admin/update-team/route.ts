@@ -18,6 +18,10 @@ export async function POST(req: Request) {
     const budgetRemaining = Number(body?.budget_remaining)
     const rosterSpotsTotal = Number(body?.roster_spots_total)
     const rosterSpotsRemaining = Number(body?.roster_spots_remaining)
+    const hitterSpotsTotal = Number(body?.hitter_spots_total)
+    const hitterSpotsRemaining = Number(body?.hitter_spots_remaining)
+    const pitcherSpotsTotal = Number(body?.pitcher_spots_total)
+    const pitcherSpotsRemaining = Number(body?.pitcher_spots_remaining)
     const reason = String(body?.reason ?? '').trim()
 
     if (!teamId) {
@@ -32,6 +36,10 @@ export async function POST(req: Request) {
       p_roster_spots_total: rosterSpotsTotal,
       p_roster_spots_remaining: rosterSpotsRemaining,
       p_reason: reason || null,
+      p_hitter_spots_total: hitterSpotsTotal,
+      p_hitter_spots_remaining: hitterSpotsRemaining,
+      p_pitcher_spots_total: pitcherSpotsTotal,
+      p_pitcher_spots_remaining: pitcherSpotsRemaining,
     })
 
     if (rpcRes.error) {
@@ -54,6 +62,12 @@ export async function POST(req: Request) {
         INVALID_ROSTER_TOTAL: 'Roster spots total must be 0 or greater.',
         INVALID_ROSTER_REMAINING: 'Roster spots remaining must be 0 or greater.',
         ROSTER_REMAINING_EXCEEDS_TOTAL: 'Roster spots remaining cannot exceed total roster spots.',
+        INVALID_HITTER_TOTAL: 'Hitter spots total must be 0 or greater.',
+        INVALID_HITTER_REMAINING: 'Hitter spots remaining must be 0 or greater.',
+        INVALID_PITCHER_TOTAL: 'Pitcher spots total must be 0 or greater.',
+        INVALID_PITCHER_REMAINING: 'Pitcher spots remaining must be 0 or greater.',
+        HITTER_REMAINING_EXCEEDS_TOTAL: 'Hitter spots remaining cannot exceed hitter spots total.',
+        PITCHER_REMAINING_EXCEEDS_TOTAL: 'Pitcher spots remaining cannot exceed pitcher spots total.',
         DUPLICATE_TEAM_NAME: 'Another team already has that name in this draft.',
         DUPLICATE_JOIN_CODE: 'Another team already has that join code in this draft.',
       }
@@ -66,6 +80,12 @@ export async function POST(req: Request) {
         INVALID_ROSTER_TOTAL: 400,
         INVALID_ROSTER_REMAINING: 400,
         ROSTER_REMAINING_EXCEEDS_TOTAL: 400,
+        INVALID_HITTER_TOTAL: 400,
+        INVALID_HITTER_REMAINING: 400,
+        INVALID_PITCHER_TOTAL: 400,
+        INVALID_PITCHER_REMAINING: 400,
+        HITTER_REMAINING_EXCEEDS_TOTAL: 400,
+        PITCHER_REMAINING_EXCEEDS_TOTAL: 400,
         DUPLICATE_TEAM_NAME: 400,
         DUPLICATE_JOIN_CODE: 400,
       }

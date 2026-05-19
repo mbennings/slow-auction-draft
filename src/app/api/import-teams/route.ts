@@ -57,18 +57,32 @@ export async function POST(req: Request) {
       const code = String(r.code ?? r.join_code ?? '').trim()
 
       const budget = Number(String(r.budget ?? '').replace(/[^0-9.-]/g, '').trim())
-      const spots = Number(
-        String(r.spots ?? r.roster_spots ?? r.roster_spots_total ?? '')
-          .replace(/[^0-9.-]/g, '')
-          .trim()
-      )
+      const hitterSpots = Number(
+  String(r.hitter_spots ?? r.hitter_spots_remaining ?? r.hitters ?? '')
+    .replace(/[^0-9.-]/g, '')
+    .trim()
+)
+
+const pitcherSpots = Number(
+  String(r.pitcher_spots ?? r.pitcher_spots_remaining ?? r.pitchers ?? '')
+    .replace(/[^0-9.-]/g, '')
+    .trim()
+)
+
+const totalSpots = hitterSpots + pitcherSpots
 
       if (!name) return { error: `Row ${rowNum}: missing name` }
       if (!code) return { error: `Row ${rowNum}: missing code for "${name}"` }
       if (!Number.isFinite(budget) || budget <= 0)
         return { error: `Row ${rowNum}: invalid budget for "${name}"` }
-      if (!Number.isFinite(spots) || spots <= 0)
-        return { error: `Row ${rowNum}: invalid spots for "${name}"` }
+      if (!Number.isFinite(hitterSpots) || hitterSpots < 0)
+  return { error: `Row ${rowNum}: invalid hitter_spots for "${name}"` }
+
+if (!Number.isFinite(pitcherSpots) || pitcherSpots < 0)
+  return { error: `Row ${rowNum}: invalid pitcher_spots for "${name}"` }
+
+if (totalSpots <= 0)
+  return { error: `Row ${rowNum}: hitter_spots + pitcher_spots must be greater than 0 for "${name}"` }
 
       return {
         draft_id,
@@ -76,8 +90,12 @@ export async function POST(req: Request) {
         join_code: code,
         budget_total: budget,
         budget_remaining: budget,
-        roster_spots_total: spots,
-        roster_spots_remaining: spots,
+        hitter_spots_total: hitterSpots,
+        hitter_spots_remaining: hitterSpots,
+        pitcher_spots_total: pitcherSpots,
+        pitcher_spots_remaining: pitcherSpots,
+        roster_spots_total: totalSpots,
+        roster_spots_remaining: totalSpots,
       }
     })
     .filter(Boolean)

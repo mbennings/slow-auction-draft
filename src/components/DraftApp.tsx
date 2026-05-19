@@ -9,6 +9,10 @@ type Team = {
   name: string
   join_code?: string | null
   budget_remaining: number
+  hitter_spots_total?: number | null
+  hitter_spots_remaining?: number | null
+  pitcher_spots_total?: number | null
+  pitcher_spots_remaining?: number | null
   roster_spots_total: number
   roster_spots_remaining: number
 }
@@ -309,6 +313,10 @@ const [adminTeamJoinCode, setAdminTeamJoinCode] = useState('')
 const [adminTeamBudgetRemaining, setAdminTeamBudgetRemaining] = useState<string>('')
 const [adminTeamRosterSpotsTotal, setAdminTeamRosterSpotsTotal] = useState<string>('')
 const [adminTeamRosterSpotsRemaining, setAdminTeamRosterSpotsRemaining] = useState<string>('')
+const [adminTeamHitterSpotsTotal, setAdminTeamHitterSpotsTotal] = useState<string>('')
+const [adminTeamHitterSpotsRemaining, setAdminTeamHitterSpotsRemaining] = useState<string>('')
+const [adminTeamPitcherSpotsTotal, setAdminTeamPitcherSpotsTotal] = useState<string>('')
+const [adminTeamPitcherSpotsRemaining, setAdminTeamPitcherSpotsRemaining] = useState<string>('')
 const [adminTeamReason, setAdminTeamReason] = useState('')
 const [adminNewTeamName, setAdminNewTeamName] = useState('')
 const [adminNewTeamJoinCode, setAdminNewTeamJoinCode] = useState('')
@@ -409,6 +417,10 @@ useEffect(() => {
     setAdminTeamBudgetRemaining('')
     setAdminTeamRosterSpotsTotal('')
     setAdminTeamRosterSpotsRemaining('')
+    setAdminTeamHitterSpotsTotal('')
+    setAdminTeamHitterSpotsRemaining('')
+    setAdminTeamPitcherSpotsTotal('')
+    setAdminTeamPitcherSpotsRemaining('')
     return
   }
 
@@ -417,6 +429,10 @@ useEffect(() => {
   setAdminTeamBudgetRemaining(String(team.budget_remaining ?? ''))
   setAdminTeamRosterSpotsTotal(String(team.roster_spots_total ?? ''))
   setAdminTeamRosterSpotsRemaining(String(team.roster_spots_remaining ?? ''))
+  setAdminTeamHitterSpotsTotal(String(team.hitter_spots_total ?? ''))
+  setAdminTeamHitterSpotsRemaining(String(team.hitter_spots_remaining ?? ''))
+  setAdminTeamPitcherSpotsTotal(String(team.pitcher_spots_total ?? ''))
+  setAdminTeamPitcherSpotsRemaining(String(team.pitcher_spots_remaining ?? ''))
 }, [showAdmin, adminSelectedTeamId, teams])
 
 useEffect(() => {
@@ -722,7 +738,7 @@ const selectedAuctionHighTeamName = selectedAuction?.high_team_id
 const [teamsRes, playersRes, auctionsRes, stateRes, settingsRes] = await Promise.all([
   supabase
     .from('teams')
-    .select('id,name,join_code,budget_remaining,roster_spots_total,roster_spots_remaining')
+    .select('id,name,join_code,budget_remaining,roster_spots_total,roster_spots_remaining,hitter_spots_total,hitter_spots_remaining,pitcher_spots_total,pitcher_spots_remaining')
     .eq('draft_id', DRAFT_ID)
     .order('name'),
 
@@ -1147,19 +1163,40 @@ async function adminUpdateTeam() {
   if (!adminSelectedTeamId) return setError('Select a team first.')
 
   const budgetRemaining = parseInt(adminTeamBudgetRemaining, 10)
-  const rosterSpotsTotal = parseInt(adminTeamRosterSpotsTotal, 10)
-  const rosterSpotsRemaining = parseInt(adminTeamRosterSpotsRemaining, 10)
+  const hitterSpotsTotal = parseInt(adminTeamHitterSpotsTotal, 10)
+  const hitterSpotsRemaining = parseInt(adminTeamHitterSpotsRemaining, 10)
+  const pitcherSpotsTotal = parseInt(adminTeamPitcherSpotsTotal, 10)
+  const pitcherSpotsRemaining = parseInt(adminTeamPitcherSpotsRemaining, 10)
+
+  const rosterSpotsTotal = hitterSpotsTotal + pitcherSpotsTotal
+  const rosterSpotsRemaining = hitterSpotsRemaining + pitcherSpotsRemaining
 
   if (!Number.isFinite(budgetRemaining) || budgetRemaining < 0) {
     return setError('Enter a valid budget remaining value.')
   }
 
-  if (!Number.isFinite(rosterSpotsTotal) || rosterSpotsTotal < 0) {
-    return setError('Enter a valid roster spots total value.')
+  if (!Number.isFinite(hitterSpotsTotal) || hitterSpotsTotal < 0) {
+  return setError('Enter a valid hitter spots total value.')
   }
 
-  if (!Number.isFinite(rosterSpotsRemaining) || rosterSpotsRemaining < 0) {
-    return setError('Enter a valid roster spots remaining value.')
+  if (!Number.isFinite(hitterSpotsRemaining) || hitterSpotsRemaining < 0) {
+    return setError('Enter a valid hitter spots remaining value.')
+  }
+
+  if (!Number.isFinite(pitcherSpotsTotal) || pitcherSpotsTotal < 0) {
+    return setError('Enter a valid pitcher spots total value.')
+  }
+
+  if (!Number.isFinite(pitcherSpotsRemaining) || pitcherSpotsRemaining < 0) {
+    return setError('Enter a valid pitcher spots remaining value.')
+  }
+
+  if (hitterSpotsRemaining > hitterSpotsTotal) {
+    return setError('Hitter spots remaining cannot exceed hitter spots total.')
+  }
+
+  if (pitcherSpotsRemaining > pitcherSpotsTotal) {
+    return setError('Pitcher spots remaining cannot exceed pitcher spots total.')
   }
 
   const adminCode = localStorage.getItem('admin_code') ?? ''
@@ -1180,6 +1217,10 @@ async function adminUpdateTeam() {
       budget_remaining: budgetRemaining,
       roster_spots_total: rosterSpotsTotal,
       roster_spots_remaining: rosterSpotsRemaining,
+      hitter_spots_total: hitterSpotsTotal,
+      hitter_spots_remaining: hitterSpotsRemaining,
+      pitcher_spots_total: pitcherSpotsTotal,
+      pitcher_spots_remaining: pitcherSpotsRemaining,
       reason: adminTeamReason,
     }),
   })
@@ -2732,6 +2773,24 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
 
   <div className="card" style={{ padding: 12 }}>
     <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Hitter Spots
+    </div>
+    <div style={{ fontSize: 20, fontWeight: 800 }}>
+      {teams.find((t) => t.id === lockedTeamId)?.hitter_spots_remaining ?? '—'}
+    </div>
+  </div>
+
+  <div className="card" style={{ padding: 12 }}>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      Pitcher Spots
+    </div>
+    <div style={{ fontSize: 20, fontWeight: 800 }}>
+      {teams.find((t) => t.id === lockedTeamId)?.pitcher_spots_remaining ?? '—'}
+    </div>
+  </div>
+
+  <div className="card" style={{ padding: 12 }}>
+    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
       Committed Max Bids
     </div>
     <div style={{ fontSize: 20, fontWeight: 800 }}>
@@ -2935,7 +2994,9 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
         <th style={{ borderBottom: '1px solid #ddd' }}>Budget Remaining</th>
         <th style={{ borderBottom: '1px solid #ddd' }}>Committed (High Bids)</th>
         <th style={{ borderBottom: '1px solid #ddd' }}>Available Budget</th>
-        <th style={{ borderBottom: '1px solid #ddd' }}>Roster Spots Left</th>
+        <th style={{ borderBottom: '1px solid #ddd' }}>Hitter Spots</th>
+        <th style={{ borderBottom: '1px solid #ddd' }}>Pitcher Spots</th>
+        <th style={{ borderBottom: '1px solid #ddd' }}>Total Spots</th>
       </tr>
     </thead>
     <tbody>
@@ -2957,7 +3018,23 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
             <td className="td-right td-strong">{t.budget_remaining}</td>
             <td className="td-right td-strong">{committed}</td>
             <td className="td-right td-strong">{available}</td>
-            <td className="td-right td-strong">{t.roster_spots_remaining}</td>
+            <td className="td-right td-strong">
+              {t.hitter_spots_remaining ?? '—'}
+              {' / '}
+              {t.hitter_spots_total ?? '—'}
+            </td>
+
+            <td className="td-right td-strong">
+              {t.pitcher_spots_remaining ?? '—'}
+              {' / '}
+              {t.pitcher_spots_total ?? '—'}
+            </td>
+
+            <td className="td-right td-strong">
+              {t.roster_spots_remaining ?? '—'}
+              {' / '}
+              {t.roster_spots_total ?? '—'}
+            </td>
           </tr>
         )
       })}
@@ -3493,30 +3570,56 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
     </label>
 
     <label>
-      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-        Roster spots total
-      </div>
-      <input
-        type="number"
-        min={0}
-        value={adminTeamRosterSpotsTotal}
-        onChange={(e) => setAdminTeamRosterSpotsTotal(e.target.value)}
-        style={{ width: '100%' }}
-      />
-    </label>
+  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+    Hitter spots total
+  </div>
+  <input
+    type="number"
+    min={0}
+    value={adminTeamHitterSpotsTotal}
+    onChange={(e) => setAdminTeamHitterSpotsTotal(e.target.value)}
+    style={{ width: '100%' }}
+  />
+</label>
 
-    <label>
-      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-        Roster spots remaining
-      </div>
-      <input
-        type="number"
-        min={0}
-        value={adminTeamRosterSpotsRemaining}
-        onChange={(e) => setAdminTeamRosterSpotsRemaining(e.target.value)}
-        style={{ width: '100%' }}
-      />
-    </label>
+<label>
+  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+    Hitter spots remaining
+  </div>
+  <input
+    type="number"
+    min={0}
+    value={adminTeamHitterSpotsRemaining}
+    onChange={(e) => setAdminTeamHitterSpotsRemaining(e.target.value)}
+    style={{ width: '100%' }}
+  />
+</label>
+
+<label>
+  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+    Pitcher spots total
+  </div>
+  <input
+    type="number"
+    min={0}
+    value={adminTeamPitcherSpotsTotal}
+    onChange={(e) => setAdminTeamPitcherSpotsTotal(e.target.value)}
+    style={{ width: '100%' }}
+  />
+</label>
+
+<label>
+  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+    Pitcher spots remaining
+  </div>
+  <input
+    type="number"
+    min={0}
+    value={adminTeamPitcherSpotsRemaining}
+    onChange={(e) => setAdminTeamPitcherSpotsRemaining(e.target.value)}
+    style={{ width: '100%' }}
+  />
+</label>
 
     <label style={{ gridColumn: '1 / -1' }}>
       <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
@@ -3635,13 +3738,13 @@ const ended = !paused && new Date(a.ends_at).getTime() <= nowTick
 <p className="help">
   Paste a team list with 2 or 3 columns. Headers are optional.
   <br />
-  Format: <b>name,budget,spots,code</b>
+  Format: <b>name,budget,hitter_spots,pitcher_spots,code</b>
   <br />
   Examples:
   <br />
-  <code>Team A,260,23,ABC123</code>
+  <code>Team A,200,19,12,ABC123</code>
   <br />
-  <code>Team B,260,23,EFG456</code>
+  <code>Team B,200,19,12,DEF456</code>
 </p>
 
   <textarea

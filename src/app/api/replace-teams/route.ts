@@ -69,12 +69,43 @@ export async function POST(req: Request) {
       const name = String(r.name ?? '').trim()
       const code = String(r.code ?? r.join_code ?? '').trim()
       const budget = Number(String(r.budget ?? '').replace(/[^0-9.-]/g, '').trim())
-      const spots = Number(String(r.spots ?? '').replace(/[^0-9.-]/g, '').trim())
+      const hitterSpots = Number(
+        String(
+          r.hitter_spots ??
+          r.Hitter_spots ??
+          r.HITTER_SPOTS ??
+          r.hitters ??
+          ''
+        )
+          .replace(/[^0-9.-]/g, '')
+          .trim()
+      )
+
+      const pitcherSpots = Number(
+        String(
+          r.pitcher_spots ??
+          r.Pitcher_spots ??
+          r.PITCHER_SPOTS ??
+          r.pitchers ??
+          ''
+        )
+          .replace(/[^0-9.-]/g, '')
+          .trim()
+      )
+
+      const totalSpots = hitterSpots + pitcherSpots
 
       if (!name) return { error: `Row ${rowNum}: missing name` }
       if (!code) return { error: `Row ${rowNum}: missing code for "${name}"` }
       if (!Number.isFinite(budget) || budget <= 0) return { error: `Row ${rowNum}: invalid budget for "${name}"` }
-      if (!Number.isFinite(spots) || spots <= 0) return { error: `Row ${rowNum}: invalid spots for "${name}"` }
+      if (!Number.isFinite(hitterSpots) || hitterSpots < 0)
+        return { error: `Row ${rowNum}: invalid hitter_spots for "${name}"` }
+
+      if (!Number.isFinite(pitcherSpots) || pitcherSpots < 0)
+        return { error: `Row ${rowNum}: invalid pitcher_spots for "${name}"` }
+
+      if (totalSpots <= 0)
+        return { error: `Row ${rowNum}: hitter_spots + pitcher_spots must be greater than 0 for "${name}"` }
 
       return {
         draft_id,
@@ -82,8 +113,12 @@ export async function POST(req: Request) {
         join_code: code,
         budget_total: budget,
         budget_remaining: budget,
-        roster_spots_total: spots,
-        roster_spots_remaining: spots,
+        hitter_spots_total: hitterSpots,
+        hitter_spots_remaining: hitterSpots,
+        pitcher_spots_total: pitcherSpots,
+        pitcher_spots_remaining: pitcherSpots,
+        roster_spots_total: totalSpots,
+        roster_spots_remaining: totalSpots,
       }
     })
     .filter(Boolean)
@@ -98,6 +133,37 @@ export async function POST(req: Request) {
 
   const up = await supabaseAdmin.from('teams').upsert(rows, { onConflict: 'draft_id,name' })
   if (up.error) return NextResponse.json({ error: up.error.message }, { status: 400 })
+
+  await supabaseAdmin
+    .from('nomination_order')
+    .delete()
+    .eq('draft_id', draft_id)
+
+  const teamsForOrderRes = await supabaseAdmin
+    .from('teams')
+    .select('id,name,draft_id')
+    .eq('draft_id', draft_id)
+    .order('name', { ascending: true })
+
+  if (teamsForOrderRes.error) {
+    return NextResponse.json({ error: teamsForOrderRes.error.message }, { status: 400 })
+  }
+
+  const orderRows = (teamsForOrderRes.data ?? []).map((team, idx) => ({
+    draft_id,
+    team_id: team.id,
+    sort_order: idx + 1,
+  }))
+
+  if (orderRows.length > 0) {
+    const orderRes = await supabaseAdmin
+      .from('nomination_order')
+      .insert(orderRows)
+
+    if (orderRes.error) {
+      return NextResponse.json({ error: orderRes.error.message }, { status: 400 })
+    }
+  }
 
   await supabaseAdmin.from('draft_events').insert({
     draft_id,

@@ -54,6 +54,8 @@ export async function POST(req: Request) {
         AUCTION_CLOSED: 'Auction is already closed.',
         TEAM_NOT_FOUND: 'Team not found for this draft.',
         NO_ROSTER_SPOTS: 'That team has no roster spots remaining.',
+        NO_HITTER_SPOTS: 'That team has no hitter roster spots remaining.',
+        NO_PITCHER_SPOTS: 'That team has no pitcher roster spots remaining.',
       }
 
       const httpByStatus: Record<string, number> = {
@@ -62,6 +64,8 @@ export async function POST(req: Request) {
         AUCTION_CLOSED: 400,
         TEAM_NOT_FOUND: 400,
         NO_ROSTER_SPOTS: 400,
+        NO_HITTER_SPOTS: 400,
+        NO_PITCHER_SPOTS: 400,
       }
 
       return NextResponse.json(
